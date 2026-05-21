@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import asdict, is_dataclass
+import math
 from typing import Any
 
 LATITUDE_KEYS = (
     "lat",
     "latitude",
-    "y",
     "latGcj02",
     "latWgs84",
     "wgs84Lat",
@@ -19,13 +19,15 @@ LONGITUDE_KEYS = (
     "lng",
     "lon",
     "longitude",
-    "x",
     "lngGcj02",
     "lngWgs84",
     "wgs84Lng",
     "gcj02Lng",
     "longitudeValue",
 )
+RELATIVE_X_KEYS = ("x", "thetaX", "theta_x", "relativeX", "relative_x")
+RELATIVE_Y_KEYS = ("y", "thetaY", "theta_y", "relativeY", "relative_y")
+METERS_PER_DEGREE_LATITUDE = 111111.0
 POSITION_KEYS = (
     "position",
     "location",
@@ -52,6 +54,37 @@ def position_dict(position: Any) -> dict[str, float] | None:
     if latitude is None or longitude is None:
         return None
     return {"lat": latitude, "lng": longitude}
+
+
+def position_dict_with_origin(
+    position: Any, origin_latitude: float | None, origin_longitude: float | None
+) -> dict[str, float] | None:
+    """Return absolute GPS from payload, using base-station origin for relative x/y."""
+    absolute = position_dict(position)
+    if absolute is not None:
+        return absolute
+    if origin_latitude is None or origin_longitude is None:
+        return None
+    relative = extract_relative_xy(position)
+    if relative is None:
+        return None
+    x_meters, y_meters = relative
+    longitude_scale = METERS_PER_DEGREE_LATITUDE * math.cos(math.radians(origin_latitude))
+    if abs(longitude_scale) < 0.000001:
+        return None
+    return {
+        "lat": origin_latitude + (y_meters / METERS_PER_DEGREE_LATITUDE),
+        "lng": origin_longitude + (x_meters / longitude_scale),
+    }
+
+
+def extract_relative_xy(position: Any) -> tuple[float, float] | None:
+    """Extract mower-relative x/y meters from known location payload shapes."""
+    payload = _to_plain(position)
+    x_value, y_value = _extract_relative_from_payload(payload, depth=0)
+    if x_value is None or y_value is None:
+        return None
+    return x_value, y_value
 
 
 def _extract_from_payload(
@@ -101,6 +134,41 @@ def _first_float(payload: dict[str, Any], keys: tuple[str, ...]) -> float | None
             if value is not None:
                 return value
     return None
+
+
+def _extract_relative_from_payload(
+    payload: Any, depth: int
+) -> tuple[float | None, float | None]:
+    if depth > 6:
+        return None, None
+
+    if isinstance(payload, dict):
+        x_value = _first_float(payload, RELATIVE_X_KEYS)
+        y_value = _first_float(payload, RELATIVE_Y_KEYS)
+        if x_value is not None and y_value is not None:
+            return x_value, y_value
+
+        for key in POSITION_KEYS:
+            if key in payload:
+                x_value, y_value = _extract_relative_from_payload(payload[key], depth + 1)
+                if x_value is not None and y_value is not None:
+                    return x_value, y_value
+
+        for value in payload.values():
+            if isinstance(value, dict | list | tuple):
+                x_value, y_value = _extract_relative_from_payload(value, depth + 1)
+                if x_value is not None and y_value is not None:
+                    return x_value, y_value
+        return None, None
+
+    if isinstance(payload, list | tuple):
+        for value in payload:
+            if isinstance(value, dict | list | tuple):
+                x_value, y_value = _extract_relative_from_payload(value, depth + 1)
+                if x_value is not None and y_value is not None:
+                    return x_value, y_value
+
+    return None, None
 
 
 def _to_plain(value: Any) -> Any:

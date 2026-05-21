@@ -4,6 +4,8 @@ from typing import Final
 
 DOMAIN: Final = "navimow"
 CONF_ZONES: Final = "zones_json"
+CONF_BASE_STATION_LATITUDE: Final = "base_station_latitude"
+CONF_BASE_STATION_LONGITUDE: Final = "base_station_longitude"
 DEFAULT_ZONES: Final = "[]"
 
 ATTR_YARD_ZONE: Final = "yard_zone"

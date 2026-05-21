@@ -3,6 +3,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+import voluptuous as vol
+
 from homeassistant import config_entries
 from homeassistant.core import callback
 from homeassistant.data_entry_flow import FlowResult
@@ -14,6 +16,8 @@ from .const import (
     CLIENT_ID,
     CLIENT_SECRET,
     API_BASE_URL,
+    CONF_BASE_STATION_LATITUDE,
+    CONF_BASE_STATION_LONGITUDE,
     MQTT_BROKER,
     MQTT_PORT,
     MQTT_USERNAME,
@@ -165,9 +169,26 @@ class NavimowOptionsFlowHandler(config_entries.OptionsFlow):
     ) -> FlowResult:
         """Manage the options."""
         if user_input is not None:
-            return self.async_create_entry(title="", data=user_input)
+            options = dict(self._config_entry.options)
+            options.update(user_input)
+            return self.async_create_entry(title="", data=options)
 
         return self.async_show_form(
             step_id="init",
-            data_schema=None,
+            data_schema=self._options_schema(),
         )
+
+    def _options_schema(self) -> vol.Schema:
+        """Return options schema."""
+        schema: dict[Any, Any] = {}
+        latitude = self._config_entry.options.get(CONF_BASE_STATION_LATITUDE)
+        longitude = self._config_entry.options.get(CONF_BASE_STATION_LONGITUDE)
+        latitude_key = vol.Optional(CONF_BASE_STATION_LATITUDE)
+        longitude_key = vol.Optional(CONF_BASE_STATION_LONGITUDE)
+        if latitude is not None:
+            latitude_key = vol.Optional(CONF_BASE_STATION_LATITUDE, default=latitude)
+        if longitude is not None:
+            longitude_key = vol.Optional(CONF_BASE_STATION_LONGITUDE, default=longitude)
+        schema[latitude_key] = vol.Coerce(float)
+        schema[longitude_key] = vol.Coerce(float)
+        return vol.Schema(schema)

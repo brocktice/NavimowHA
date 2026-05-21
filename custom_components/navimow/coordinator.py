@@ -7,6 +7,7 @@ from datetime import timedelta
 from typing import Any
 
 from homeassistant.core import HomeAssistant
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers import config_entry_oauth2_flow
 from homeassistant.helpers.storage import Store
@@ -23,12 +24,14 @@ from mower_sdk.models import (
 from mower_sdk.sdk import NavimowSDK
 
 from .const import (
+    CONF_BASE_STATION_LATITUDE,
+    CONF_BASE_STATION_LONGITUDE,
     DOMAIN,
     HTTP_FALLBACK_MIN_INTERVAL,
     MQTT_STALE_SECONDS,
     UPDATE_INTERVAL,
 )
-from .position import extract_position, position_dict
+from .position import extract_position, position_dict_with_origin
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -50,6 +53,7 @@ class NavimowCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         sdk: NavimowSDK,
         api: MowerAPI,
         device: Device,
+        config_entry: ConfigEntry,
         oauth_session: config_entry_oauth2_flow.OAuth2Session | None = None,
     ) -> None:
         super().__init__(
@@ -61,6 +65,7 @@ class NavimowCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.sdk = sdk
         self.api = api
         self.device = device
+        self.config_entry = config_entry
         self.oauth_session = oauth_session
         self.data: dict[str, Any] = {}
         self._last_state: DeviceStateMessage | None = None
@@ -135,7 +140,7 @@ class NavimowCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             state=status.status.value,
             battery=status.battery,
             signal_strength=status.signal_strength,
-            position=position_dict(status.position or status.extra),
+            position=self._position_dict(status.position or status.extra),
             error=error,
             metrics=None,
         )
@@ -185,9 +190,9 @@ class NavimowCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         cached_state = self.sdk.get_cached_state(self.device.id)
         if cached_state is not None:
-            self._last_state = cached_state
+            self._last_state = self._state_with_normalized_position(cached_state)
             self._last_data_source = "mqtt_cache"
-            self._maybe_record_heatmap_sample(cached_state)
+            self._maybe_record_heatmap_sample(self._last_state)
 
         cached_attrs = self.sdk.get_cached_attributes(self.device.id)
         if cached_attrs is not None:
@@ -250,8 +255,9 @@ class NavimowCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         self._last_mqtt_update = time.monotonic()
         self._last_data_source = "mqtt_push"
-        self._maybe_record_heatmap_sample(state)
-        self.hass.loop.call_soon_threadsafe(self._update_from_state, state)
+        normalized_state = self._state_with_normalized_position(state)
+        self._maybe_record_heatmap_sample(normalized_state)
+        self.hass.loop.call_soon_threadsafe(self._update_from_state, normalized_state)
 
     def _handle_attributes(self, attrs: DeviceAttributesMessage) -> None:
         if attrs.device_id != self.device.id:
@@ -265,7 +271,7 @@ class NavimowCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.hass.loop.call_soon_threadsafe(self._update_from_attributes, attrs)
 
     def _update_from_state(self, state: DeviceStateMessage) -> None:
-        self._last_state = state
+        self._last_state = self._state_with_normalized_position(state)
         self._last_data_source = "mqtt_push"
         self.async_set_updated_data(self._build_data())
 
@@ -305,14 +311,14 @@ class NavimowCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 continue
             if status_data.get("id") not in (None, self.device.id):
                 continue
-            position = position_dict(status_data)
+            position = self._position_dict(status_data)
             if position is not None:
                 return position
         return None
 
     def update_position(self, position_payload: Any) -> None:
         """Merge a standalone MQTT location payload into the cached state."""
-        position = position_dict(position_payload)
+        position = self._position_dict(position_payload)
         if position is None:
             _LOGGER.debug(
                 "Ignoring Navimow position payload without coordinates: %s",
@@ -343,6 +349,38 @@ class NavimowCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._last_data_source = "mqtt_location"
         self._maybe_record_heatmap_sample(state)
         self.async_set_updated_data(self._build_data())
+
+    def _position_dict(self, position_payload: Any) -> dict[str, float] | None:
+        """Return absolute GPS position from absolute or base-relative payloads."""
+        return position_dict_with_origin(
+            position_payload,
+            self._option_float(CONF_BASE_STATION_LATITUDE),
+            self._option_float(CONF_BASE_STATION_LONGITUDE),
+        )
+
+    def _option_float(self, key: str) -> float | None:
+        value = self.config_entry.options.get(key)
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    def _state_with_normalized_position(
+        self, state: DeviceStateMessage
+    ) -> DeviceStateMessage:
+        position = self._position_dict(state.position)
+        if position == state.position:
+            return state
+        return DeviceStateMessage(
+            device_id=state.device_id,
+            timestamp=state.timestamp,
+            state=state.state,
+            battery=state.battery,
+            signal_strength=state.signal_strength,
+            position=position,
+            error=state.error,
+            metrics=state.metrics,
+        )
 
     def _maybe_record_heatmap_sample(self, state: DeviceStateMessage | None) -> None:
         """Persist a throttled position/status sample for heatmap rendering."""
