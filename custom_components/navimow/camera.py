@@ -54,14 +54,13 @@ async def async_setup_entry(
     """Set up yard map cameras."""
     data = hass.data["navimow"][entry.entry_id]
     coordinators: dict[str, NavimowCoordinator] = data["coordinators"]
-    zones = parse_zones(entry.options.get(CONF_ZONES, DEFAULT_ZONES))
     entities = []
     for coordinator in coordinators.values():
         entities.extend(
             [
-                NavimowYardMapCamera(coordinator, zones),
-                NavimowYardDetailMapCamera(coordinator, zones),
-                NavimowYardHeatmapCamera(coordinator, zones),
+                NavimowYardMapCamera(coordinator, entry),
+                NavimowYardDetailMapCamera(coordinator, entry),
+                NavimowYardHeatmapCamera(coordinator, entry),
             ]
         )
     async_add_entities(entities)
@@ -72,32 +71,36 @@ class NavimowYardMapCamera(NavimowEntity, Camera):
 
     _attr_name = "Yard Map"
 
-    def __init__(
-        self, coordinator: NavimowCoordinator, zones: list[dict[str, Any]]
-    ) -> None:
+    def __init__(self, coordinator: NavimowCoordinator, entry: ConfigEntry) -> None:
         """Initialize the camera."""
         super().__init__(coordinator)
         Camera.__init__(self)
         self.content_type = "image/png"
         self._attr_unique_id = f"navimow_{self.mower_id}_yard_map"
-        self._zones = zones
+        self._entry = entry
+
+    @property
+    def zones(self) -> list[dict[str, Any]]:
+        """Return configured yard zones."""
+        return parse_zones(self._entry.options.get(CONF_ZONES, DEFAULT_ZONES))
 
     async def async_camera_image(
         self, width: int | None = None, height: int | None = None
     ) -> bytes | None:
         """Return PNG image bytes."""
         mower_point = self.mower_position
-        points = _collect_points(self._zones, mower_point)
+        zones = self.zones
+        points = _collect_points(zones, mower_point)
         if not points:
             return _empty_png("No mower position or yard zones available")
 
         bounds = _bounds(points, WIDTH, HEIGHT)
         tile_data = await _satellite_tiles(self.hass, bounds)
-        yard_zone = _yard_zone(mower_point, self._zones)
+        yard_zone = _yard_zone(mower_point, zones)
         return await self.hass.async_add_executor_job(
             _render_png,
             bounds,
-            self._zones,
+            zones,
             mower_point,
             self.mower_name,
             yard_zone or "Unknown",
@@ -113,12 +116,13 @@ class NavimowYardMapCamera(NavimowEntity, Camera):
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return map attributes."""
         mower_point = self.mower_position
+        zones = self.zones
         return {
             **super().extra_state_attributes,
             ATTR_YARD_ZONES: find_zones(
                 mower_point[0] if mower_point else None,
                 mower_point[1] if mower_point else None,
-                self._zones,
+                zones,
             ),
         }
 
@@ -134,11 +138,9 @@ class NavimowYardDetailMapCamera(NavimowYardMapCamera):
 
     _attr_name = "Yard Map Detail"
 
-    def __init__(
-        self, coordinator: NavimowCoordinator, zones: list[dict[str, Any]]
-    ) -> None:
+    def __init__(self, coordinator: NavimowCoordinator, entry: ConfigEntry) -> None:
         """Initialize the camera."""
-        super().__init__(coordinator, zones)
+        super().__init__(coordinator, entry)
         self._attr_unique_id = f"navimow_{self.mower_id}_yard_map_detail"
 
     async def async_camera_image(
@@ -146,18 +148,19 @@ class NavimowYardDetailMapCamera(NavimowYardMapCamera):
     ) -> bytes | None:
         """Return square PNG image bytes centered on the mower."""
         mower_point = self.mower_position
-        points = _collect_points(self._zones, mower_point)
+        zones = self.zones
+        points = _collect_points(zones, mower_point)
         if not points:
             return _empty_png("No mower position or yard zones available", DETAIL_WIDTH, DETAIL_HEIGHT)
 
         full_bounds = _bounds(points, WIDTH, HEIGHT)
         bounds = _detail_bounds(full_bounds, mower_point)
         tile_data = await _satellite_tiles(self.hass, bounds)
-        yard_zone = _yard_zone(mower_point, self._zones)
+        yard_zone = _yard_zone(mower_point, zones)
         return await self.hass.async_add_executor_job(
             _render_png,
             bounds,
-            self._zones,
+            zones,
             mower_point,
             self.mower_name,
             yard_zone or "Unknown",
@@ -175,11 +178,9 @@ class NavimowYardHeatmapCamera(NavimowYardMapCamera):
 
     _attr_name = "Yard Heatmap"
 
-    def __init__(
-        self, coordinator: NavimowCoordinator, zones: list[dict[str, Any]]
-    ) -> None:
+    def __init__(self, coordinator: NavimowCoordinator, entry: ConfigEntry) -> None:
         """Initialize the camera."""
-        super().__init__(coordinator, zones)
+        super().__init__(coordinator, entry)
         self._attr_unique_id = f"navimow_{self.mower_id}_yard_heatmap"
 
     @property
@@ -203,17 +204,18 @@ class NavimowYardHeatmapCamera(NavimowYardMapCamera):
             if _coerce_float(sample.get("latitude")) is not None
             and _coerce_float(sample.get("longitude")) is not None
         ]
-        points = _collect_points(self._zones, mower_point) + sample_points
+        zones = self.zones
+        points = _collect_points(zones, mower_point) + sample_points
         if not points:
             return _empty_png("No mower position, yard zones, or heatmap samples available")
 
         bounds = _bounds(points, WIDTH, HEIGHT)
         tile_data = await _satellite_tiles(self.hass, bounds)
-        yard_zone = _yard_zone(mower_point, self._zones)
+        yard_zone = _yard_zone(mower_point, zones)
         return await self.hass.async_add_executor_job(
             _render_png,
             bounds,
-            self._zones,
+            zones,
             mower_point,
             self.mower_name,
             yard_zone or "Unknown",

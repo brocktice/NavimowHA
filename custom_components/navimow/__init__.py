@@ -28,6 +28,7 @@ _LOGGER = logging.getLogger(__name__)
 _LOGGER.debug("Navimow module imported (__init__.py)")
 
 PLATFORMS: list[Platform] = [
+    Platform.BINARY_SENSOR,
     Platform.CAMERA,
     Platform.DEVICE_TRACKER,
     Platform.LAWN_MOWER,
@@ -405,6 +406,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             "unload_flag": _unload_flag,
         }
 
+        from .panel import async_setup_panel
+
+        await async_setup_panel(hass, entry)
+
         # 转发到平台
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
@@ -422,6 +427,10 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 
     if unload_ok:
+        from .panel import async_unload_panel
+
+        await async_unload_panel(hass)
+
         # 清理数据
         if entry.entry_id in hass.data.get(DOMAIN, {}):
             data = hass.data[DOMAIN][entry.entry_id]

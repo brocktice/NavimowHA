@@ -1,0 +1,167 @@
+blueprint:
+  name: Navimow Yard - Problem notification with map
+  description: >
+    Send a mobile notification with the mower's current yard-zone description
+    and a camera snapshot of the Navimow Yard map when the mower enters a
+    problem/stuck state.
+  domain: automation
+  input:
+    problem_sensor:
+      name: Problem/stuck sensor
+      description: The Navimow stuck/problem binary sensor.
+      selector:
+        entity:
+          domain: binary_sensor
+    status_sensor:
+      name: Status sensor
+      description: The Navimow status sensor for mower state.
+      selector:
+        entity:
+          domain: sensor
+    yard_zone_sensor:
+      name: Yard zone sensor
+      description: The Navimow Yard yard-zone sensor.
+      selector:
+        entity:
+          domain: sensor
+    yard_map_camera:
+      name: Notification map camera
+      description: Select the Navimow Yard Map Detail camera for a square mower-centered notification image, or Yard Map for the full yard.
+      selector:
+        entity:
+          domain: camera
+    notify_devices:
+      name: Notification devices
+      description: Mobile App devices to notify.
+      default: []
+      selector:
+        device:
+          integration: mobile_app
+          multiple: true
+    notify_services:
+      name: Additional notify services
+      description: "Optional notify services to call, such as notify.mobile_app_phone or notify.family."
+      default: []
+      selector:
+        text:
+          multiple: true
+    notify_service:
+      name: Legacy fallback notify service
+      description: "Optional single notify service kept for existing automations. Prefer Additional notify services for new automations."
+      default: ""
+      selector:
+        text:
+    title:
+      name: Notification title
+      default: Mower needs attention
+      selector:
+        text:
+    message_prefix:
+      name: Message prefix
+      default: The mower is in a problem state.
+      selector:
+        text:
+
+mode: single
+
+trigger:
+  - platform: state
+    entity_id: !input problem_sensor
+    to: "on"
+
+variables:
+  problem_entity: !input problem_sensor
+  status_entity: !input status_sensor
+  zone_entity: !input yard_zone_sensor
+  camera_entity: !input yard_map_camera
+  notify_devices: !input notify_devices
+  notify_services: !input notify_services
+  notify_service: !input notify_service
+  notification_title: !input title
+  notification_prefix: !input message_prefix
+  mower_state: "{{ states(status_entity) }}"
+  mower_error_code: "{{ state_attr(problem_entity, 'error_code') or state_attr(status_entity, 'error_code') }}"
+  mower_battery: "{{ state_attr(status_entity, 'battery') }}"
+  mower_state_label: >-
+    {% set labels = {
+      'error': 'Needs attention',
+      'unknown': 'Unknown',
+      'mowing': 'Mowing',
+      'paused': 'Paused',
+      'docked': 'Docked',
+      'charging': 'Charging',
+      'returning': 'Returning',
+      'idle': 'Idle'
+    } %}
+    {{ labels.get(mower_state, mower_state | replace('_', ' ') | title) if mower_state not in ['unknown', 'Unknown', 'unavailable'] else 'unknown' }}
+  zone_name: "{{ states(zone_entity) }}"
+  zone_list: "{{ state_attr(zone_entity, 'yard_zones') or [] }}"
+  notification_message: >-
+    {{ notification_prefix }}
+    Status: {{ mower_state_label }}.
+    {% if mower_error_code not in [none, '', 0, '0'] %}
+    Error code: {{ mower_error_code }}.
+    {% endif %}
+    {% if mower_battery not in [none, '', 'unknown', 'unavailable'] %}
+    Battery: {{ mower_battery }}%.
+    {% endif %}
+    Location: {{ zone_name if zone_name not in ['unknown', 'Unknown', 'unavailable'] else 'unknown yard zone' }}.
+    {% if zone_list | count > 1 %}
+    Matching zones: {{ zone_list | join(', ') }}.
+    {% endif %}
+  snapshot_path: /config/www/navimow_yard_problem_map.png
+  snapshot_url: /local/navimow_yard_problem_map.png
+
+action:
+  - service: camera.snapshot
+    target:
+      entity_id: !input yard_map_camera
+    data:
+      filename: "{{ snapshot_path }}"
+  - delay:
+      seconds: 1
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ notify_devices | count > 0 }}"
+        sequence:
+          - repeat:
+              for_each: "{{ notify_devices }}"
+              sequence:
+                - service: "notify.mobile_app_{{ device_attr(repeat.item, 'name') | slugify }}"
+                  data:
+                    title: "{{ notification_title }}"
+                    message: "{{ notification_message }}"
+                    data:
+                      image: "{{ snapshot_url }}"
+                      url: "{{ snapshot_url }}"
+                      clickAction: "{{ snapshot_url }}"
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ notify_services | count > 0 }}"
+        sequence:
+          - repeat:
+              for_each: "{{ notify_services }}"
+              sequence:
+                - service: "{{ repeat.item }}"
+                  data:
+                    title: "{{ notification_title }}"
+                    message: "{{ notification_message }}"
+                    data:
+                      image: "{{ snapshot_url }}"
+                      url: "{{ snapshot_url }}"
+                      clickAction: "{{ snapshot_url }}"
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ notify_services | count == 0 and notify_service | length > 0 }}"
+        sequence:
+          - service: "{{ notify_service }}"
+            data:
+              title: "{{ notification_title }}"
+              message: "{{ notification_message }}"
+              data:
+                image: "{{ snapshot_url }}"
+                url: "{{ snapshot_url }}"
+                clickAction: "{{ snapshot_url }}"

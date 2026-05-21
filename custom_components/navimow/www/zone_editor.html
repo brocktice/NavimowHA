@@ -1,0 +1,661 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Navimow Yard Zone Editor</title>
+    <link rel="stylesheet" href="vendor/leaflet/leaflet.css" />
+    <link rel="stylesheet" href="vendor/leaflet-draw/leaflet.draw.css" />
+    <style>
+      :root {
+        color-scheme: light dark;
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+          "Segoe UI", sans-serif;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background: #f4f6f5;
+        color: #17201b;
+      }
+
+      main {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 390px;
+        height: 100vh;
+      }
+
+      #map {
+        min-height: 100vh;
+        height: 100vh;
+        width: 100%;
+      }
+
+      .leaflet-container {
+        height: 100%;
+        width: 100%;
+      }
+
+      .leaflet-tile,
+      .leaflet-marker-icon,
+      .leaflet-marker-shadow {
+        max-width: none;
+        max-height: none;
+      }
+
+      .leaflet-draw-toolbar a {
+        position: relative;
+      }
+
+      .leaflet-draw-toolbar a::after {
+        position: absolute;
+        left: 34px;
+        top: 3px;
+        display: none;
+        min-width: 78px;
+        padding: 4px 7px;
+        border-radius: 5px;
+        background: #17201b;
+        color: #fff;
+        font-size: 12px;
+        font-weight: 700;
+        line-height: 1.2;
+        pointer-events: none;
+        z-index: 1000;
+      }
+
+      .leaflet-draw-toolbar a:hover::after,
+      .leaflet-draw-toolbar a:focus::after {
+        display: block;
+      }
+
+      .leaflet-draw-draw-polygon::after {
+        content: "Polygon";
+      }
+
+      .leaflet-draw-draw-rectangle::after {
+        content: "Rectangle";
+      }
+
+      .leaflet-draw-draw-circle::after {
+        content: "Circle";
+      }
+
+      .leaflet-draw-edit-edit::after {
+        content: "Edit";
+      }
+
+      .leaflet-draw-edit-remove::after {
+        content: "Delete";
+      }
+
+      aside {
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+        overflow: auto;
+        padding: 18px;
+        border-left: 1px solid #d6ded8;
+        background: #ffffff;
+      }
+
+      .save-bar {
+        position: sticky;
+        top: -18px;
+        z-index: 500;
+        display: grid;
+        gap: 8px;
+        padding: 12px 0;
+        background: #ffffff;
+        border-bottom: 1px solid #e3ebe5;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: 20px;
+        line-height: 1.25;
+      }
+
+      label {
+        display: grid;
+        gap: 6px;
+        font-size: 13px;
+        font-weight: 650;
+      }
+
+      input,
+      textarea,
+      button {
+        width: 100%;
+        border: 1px solid #c8d2cc;
+        border-radius: 6px;
+        font: inherit;
+      }
+
+      input,
+      textarea {
+        padding: 9px 10px;
+        background: #fff;
+        color: #17201b;
+      }
+
+      textarea {
+        min-height: 230px;
+        resize: vertical;
+        font-family:
+          ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+          "Liberation Mono", monospace;
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
+      button {
+        cursor: pointer;
+        padding: 10px 12px;
+        background: #256d4d;
+        color: white;
+        font-weight: 700;
+      }
+
+      button.secondary {
+        background: #eef4f0;
+        color: #203429;
+      }
+
+      .row {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+      }
+
+      .muted {
+        margin: 0;
+        color: #52635a;
+        font-size: 13px;
+        line-height: 1.45;
+      }
+
+      .zone-list {
+        display: grid;
+        gap: 8px;
+      }
+
+      .zone-item {
+        display: grid;
+        gap: 6px;
+        padding: 10px;
+        border: 1px solid #d8e1db;
+        border-radius: 6px;
+        background: #f8faf9;
+      }
+
+      .mower-marker {
+        display: grid;
+        place-items: center;
+        width: 36px;
+        height: 36px;
+        border: 2px solid #ffffff;
+        border-radius: 999px;
+        background: #256d4d;
+        box-shadow: 0 2px 8px rgb(0 0 0 / 35%);
+        color: #ffffff;
+      }
+
+      .mower-marker svg {
+        width: 25px;
+        height: 25px;
+        display: block;
+      }
+
+      @media (max-width: 860px) {
+        main {
+          grid-template-columns: 1fr;
+          height: auto;
+        }
+
+        #map {
+          min-height: 62vh;
+          height: 62vh;
+        }
+
+        aside {
+          border-left: 0;
+          border-top: 1px solid #d6ded8;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div id="map"></div>
+      <aside>
+        <div>
+          <h1>Navimow Yard Zone Editor</h1>
+          <p class="muted" id="intro">
+            Draw rectangles, circles, or polygons. Rename each zone, then save
+            it directly to Home Assistant.
+          </p>
+        </div>
+
+        <div class="row">
+          <label>
+            Latitude
+            <input id="lat" inputmode="decimal" placeholder="44.000000" />
+          </label>
+          <label>
+            Longitude
+            <input id="lon" inputmode="decimal" placeholder="-93.000000" />
+          </label>
+        </div>
+        <div class="save-bar">
+          <button id="save">Save Zones to Home Assistant</button>
+          <p class="muted" id="status"></p>
+        </div>
+
+        <button id="go">Center Map</button>
+        <button id="fit" class="secondary">Fit Drawn Zones</button>
+
+        <div class="zone-list" id="zone-list"></div>
+
+        <label>
+          Zones JSON
+          <textarea id="json" spellcheck="false"></textarea>
+        </label>
+        <button id="copy">Copy JSON</button>
+      </aside>
+    </main>
+
+    <script src="vendor/leaflet/leaflet.js"></script>
+    <script src="vendor/leaflet-draw/leaflet.draw.js"></script>
+    <script>
+      const params = new URLSearchParams(window.location.search);
+      const startLat = Number(params.get("lat")) || 44.0;
+      const startLon = Number(params.get("lon")) || -93.0;
+      const latInput = document.querySelector("#lat");
+      const lonInput = document.querySelector("#lon");
+      const jsonOutput = document.querySelector("#json");
+      const zoneList = document.querySelector("#zone-list");
+      const statusText = document.querySelector("#status");
+      const saveButton = document.querySelector("#save");
+      const drawnItems = new L.FeatureGroup();
+      const isHomeAssistantPanel = params.get("ha") === "1";
+      let mowerMarker;
+      let zoneCounter = 1;
+      let isLoading = false;
+      let dirty = false;
+
+      latInput.value = startLat.toFixed(7);
+      lonInput.value = startLon.toFixed(7);
+
+      const map = L.map("map", {
+        center: [startLat, startLon],
+        zoom: 19,
+        zoomControl: true,
+      });
+
+      const mowerIcon = L.divIcon({
+        className: "",
+        html: `<div class="mower-marker" aria-label="Mower">${mowerSvg()}</div>`,
+        iconSize: [36, 36],
+        iconAnchor: [18, 18],
+        popupAnchor: [0, -19],
+      });
+
+      setTimeout(() => map.invalidateSize(), 0);
+
+      const streetLayer = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        maxZoom: 22,
+        maxNativeZoom: 19,
+        attribution: "&copy; OpenStreetMap contributors",
+      });
+
+      const satelliteLayer = L.tileLayer(
+        "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+        {
+          maxZoom: 22,
+          maxNativeZoom: 19,
+          attribution:
+            "Tiles &copy; Esri, Maxar, Earthstar Geographics, and the GIS User Community",
+        },
+      );
+
+      satelliteLayer.addTo(map);
+
+      L.control
+        .layers(
+          {
+            Satellite: satelliteLayer,
+            Streets: streetLayer,
+          },
+          {},
+          { position: "topright" },
+        )
+        .addTo(map);
+
+      drawnItems.addTo(map);
+
+      map.addControl(
+        new L.Control.Draw({
+          draw: {
+            marker: false,
+            circlemarker: false,
+            polyline: false,
+            rectangle: { shapeOptions: zoneStyle() },
+            polygon: {
+              allowIntersection: false,
+              showArea: true,
+              shapeOptions: zoneStyle(),
+            },
+            circle: { shapeOptions: zoneStyle() },
+          },
+          edit: {
+            featureGroup: drawnItems,
+          },
+        }),
+      );
+
+      map.on(L.Draw.Event.CREATED, (event) => {
+        const layer = event.layer;
+        layer.zoneName = `Zone ${zoneCounter++}`;
+        drawnItems.addLayer(layer);
+        markDirty();
+        refresh();
+      });
+
+      map.on(L.Draw.Event.EDITED, () => {
+        markDirty();
+        refresh();
+      });
+      map.on(L.Draw.Event.DELETED, () => {
+        markDirty();
+        refresh();
+      });
+
+      if (isHomeAssistantPanel) {
+        document.querySelector("#intro").textContent =
+          "Draw or edit yard zones, then save them directly to this integration.";
+        document.querySelector("#copy").textContent = "Copy JSON Backup";
+        loadHomeAssistantState();
+      } else {
+        saveButton.hidden = true;
+        loadMowerLocation();
+      }
+
+      document.querySelector("#go").addEventListener("click", () => {
+        const lat = Number(latInput.value);
+        const lon = Number(lonInput.value);
+        if (Number.isFinite(lat) && Number.isFinite(lon)) {
+          map.setView([lat, lon], 19);
+        }
+      });
+
+      document.querySelector("#fit").addEventListener("click", () => {
+        if (drawnItems.getLayers().length) {
+          map.fitBounds(drawnItems.getBounds().pad(0.2));
+        }
+      });
+
+      document.querySelector("#copy").addEventListener("click", async () => {
+        await navigator.clipboard.writeText(jsonOutput.value);
+        setStatus("Copied JSON.");
+      });
+
+      saveButton.addEventListener("click", async () => {
+        await saveZonesToHomeAssistant();
+      });
+
+      function refresh() {
+        renderZoneList();
+        jsonOutput.value = JSON.stringify(buildZones(), null, 2);
+      }
+
+      async function loadHomeAssistantState() {
+        try {
+          const response = await fetch("/api/navimow_yard/zones", {
+            cache: "no-store",
+            credentials: "same-origin",
+            headers: authHeaders(),
+          });
+          if (!response.ok) {
+            throw new Error(`Load failed: ${response.status}`);
+          }
+          const payload = await response.json();
+          loadZones(payload.zones || []);
+          const mower = (payload.mowers || [])[0];
+          if (mower) {
+            latInput.value = Number(mower.latitude).toFixed(7);
+            lonInput.value = Number(mower.longitude).toFixed(7);
+            map.setView([mower.latitude, mower.longitude], 20);
+            setMowerMarker(mower.latitude, mower.longitude, mower.name || "Mower");
+            setStatus(
+              mower.yard_zone
+                ? `Mower is currently in ${mower.yard_zone}.`
+                : "Mower location loaded.",
+            );
+          } else {
+            setStatus("No mower position returned yet.");
+          }
+          refresh();
+          dirty = false;
+        } catch (error) {
+          setStatus(`Could not load Home Assistant state: ${error.message}`);
+        }
+      }
+
+      async function saveZonesToHomeAssistant() {
+        const zones = buildZones();
+        try {
+          saveButton.disabled = true;
+          setStatus("Saving zones...");
+          const response = await fetch("/api/navimow_yard/zones", {
+            method: "POST",
+            credentials: "same-origin",
+            headers: { "Content-Type": "application/json", ...authHeaders() },
+            body: JSON.stringify({ zones }),
+          });
+          if (!response.ok) {
+            const text = await response.text();
+            throw new Error(`${response.status} ${text}`);
+          }
+          const payload = await response.json();
+          loadZones(payload.zones || zones);
+          refresh();
+          dirty = false;
+          setStatus(`Saved ${payload.zones.length} zones to Home Assistant.`);
+        } catch (error) {
+          setStatus(`Save failed: ${error.message}`);
+        } finally {
+          saveButton.disabled = false;
+        }
+      }
+
+      async function loadMowerLocation() {
+        if (params.has("lat") && params.has("lon")) {
+          setMowerMarker(startLat, startLon, "Mower");
+          return;
+        }
+
+        try {
+          const response = await fetch("mower_location.json", {
+            cache: "no-store",
+          });
+          if (!response.ok) {
+            return;
+          }
+          const location = await response.json();
+          if (
+            Number.isFinite(location.latitude) &&
+            Number.isFinite(location.longitude)
+          ) {
+            latInput.value = Number(location.latitude).toFixed(7);
+            lonInput.value = Number(location.longitude).toFixed(7);
+            map.setView([location.latitude, location.longitude], 20);
+            setMowerMarker(
+              location.latitude,
+              location.longitude,
+              location.name || "Mower",
+            );
+          }
+        } catch (error) {
+          console.debug("No mower location available for auto-centering", error);
+        }
+      }
+
+      function setMowerMarker(latitude, longitude, name) {
+        if (mowerMarker) {
+          mowerMarker.setLatLng([latitude, longitude]);
+          mowerMarker.bindPopup(name);
+          return;
+        }
+        mowerMarker = L.marker([latitude, longitude], { icon: mowerIcon })
+          .addTo(map)
+          .bindPopup(name);
+      }
+
+      function loadZones(zones) {
+        isLoading = true;
+        drawnItems.clearLayers();
+        zoneCounter = 1;
+        for (const zone of zones) {
+          let layer;
+          if (Array.isArray(zone.center) && Number.isFinite(zone.radius_m)) {
+            layer = L.circle(zone.center, {
+              radius: zone.radius_m,
+              ...zoneStyle(),
+            });
+          } else if (Array.isArray(zone.polygon) && zone.polygon.length >= 3) {
+            layer = L.polygon(zone.polygon, zoneStyle());
+          }
+          if (layer) {
+            layer.zoneName = zone.name || `Zone ${zoneCounter}`;
+            drawnItems.addLayer(layer);
+            zoneCounter += 1;
+          }
+        }
+        isLoading = false;
+      }
+
+      function setStatus(message) {
+        statusText.textContent = message;
+      }
+
+      function markDirty() {
+        if (isLoading) {
+          return;
+        }
+        dirty = true;
+        setStatus("Unsaved changes.");
+      }
+
+      function authHeaders() {
+        try {
+          const tokens = JSON.parse(localStorage.getItem("hassTokens") || "{}");
+          const token = tokens.access_token;
+          return token ? { Authorization: `Bearer ${token}` } : {};
+        } catch (error) {
+          return {};
+        }
+      }
+
+      function renderZoneList() {
+        zoneList.replaceChildren();
+        drawnItems.eachLayer((layer) => {
+          const wrapper = document.createElement("div");
+          wrapper.className = "zone-item";
+          const label = document.createElement("label");
+          label.textContent = "Zone name";
+          const input = document.createElement("input");
+          input.value = layer.zoneName || "";
+          input.addEventListener("input", () => {
+            layer.zoneName = input.value;
+            markDirty();
+            jsonOutput.value = JSON.stringify(buildZones(), null, 2);
+          });
+          label.appendChild(input);
+          wrapper.appendChild(label);
+          zoneList.appendChild(wrapper);
+        });
+      }
+
+      function buildZones() {
+        const zones = [];
+        drawnItems.eachLayer((layer) => {
+          const name = layer.zoneName || "Unnamed zone";
+          if (layer instanceof L.Circle) {
+            const center = layer.getLatLng();
+            zones.push({
+              name,
+              center: [round(center.lat), round(center.lng)],
+              radius_m: Math.round(layer.getRadius()),
+            });
+            return;
+          }
+
+          const latLngs = getOuterLatLngs(layer);
+          if (!latLngs.length) {
+            return;
+          }
+          zones.push({
+            name,
+            polygon: latLngs.map((point) => [round(point.lat), round(point.lng)]),
+          });
+        });
+        return zones;
+      }
+
+      function getOuterLatLngs(layer) {
+        if (layer instanceof L.Rectangle) {
+          const bounds = layer.getBounds();
+          const north = bounds.getNorth();
+          const south = bounds.getSouth();
+          const east = bounds.getEast();
+          const west = bounds.getWest();
+          return [
+            L.latLng(north, west),
+            L.latLng(north, east),
+            L.latLng(south, east),
+            L.latLng(south, west),
+          ];
+        }
+
+        if (layer instanceof L.Polygon) {
+          const latLngs = layer.getLatLngs();
+          return Array.isArray(latLngs[0]) ? latLngs[0] : latLngs;
+        }
+        return [];
+      }
+
+      function round(value) {
+        return Number(value.toFixed(7));
+      }
+
+      function zoneStyle() {
+        return {
+          color: "#256d4d",
+          fillColor: "#4ba870",
+          fillOpacity: 0.22,
+          weight: 2,
+        };
+      }
+
+      function mowerSvg() {
+        return `
+          <svg viewBox="0 0 24 24" role="img" aria-hidden="true">
+            <path
+              fill="currentColor"
+              d="M1 14V5H13C18.5 5 23 9.5 23 15V17H20.83C20.42 18.17 19.31 19 18 19C16.69 19 15.58 18.17 15.17 17H10C9.09 18.21 7.64 19 6 19C3.24 19 1 16.76 1 14M6 11C4.34 11 3 12.34 3 14C3 15.66 4.34 17 6 17C7.66 17 9 15.66 9 14C9 12.34 7.66 11 6 11M15 10V12H20.25C19.92 11.27 19.5 10.6 19 10H15Z"
+            />
+          </svg>
+        `;
+      }
+
+      refresh();
+    </script>
+  </body>
+</html>

@@ -17,8 +17,18 @@ from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN
+from .const import (
+    ATTR_LATITUDE,
+    ATTR_LONGITUDE,
+    ATTR_YARD_ZONE,
+    ATTR_YARD_ZONES,
+    CONF_ZONES,
+    DEFAULT_ZONES,
+    DOMAIN,
+)
 from .coordinator import NavimowCoordinator
+from .entity import NavimowEntity
+from .yard import find_zone, find_zones, parse_zones
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -52,7 +62,7 @@ async def async_setup_entry(
     devices = data["devices"]
     coordinators: dict[str, NavimowCoordinator] = data["coordinators"]
 
-    entities: list[NavimowSensor] = []
+    entities: list[SensorEntity] = []
     for device in devices:
         coordinator = coordinators[device.id]
         for description in SENSOR_DESCRIPTIONS:
@@ -62,6 +72,8 @@ async def async_setup_entry(
                     entity_description=description,
                 )
             )
+        entities.append(NavimowStatusSensor(coordinator))
+        entities.append(NavimowYardZoneSensor(coordinator, config_entry))
     async_add_entities(entities)
 
 
@@ -100,3 +112,79 @@ class NavimowSensor(CoordinatorEntity[NavimowCoordinator], SensorEntity):
     def native_value(self) -> Any:
         """Return sensor value from coordinator."""
         return self.entity_description.value_fn(self.coordinator)
+
+
+class NavimowStatusSensor(NavimowEntity, SensorEntity):
+    """Human-readable mower status sensor."""
+
+    _attr_name = "Status"
+
+    def __init__(self, coordinator: NavimowCoordinator) -> None:
+        """Initialize the sensor."""
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{DOMAIN}_{self.mower_id}_status"
+
+    @property
+    def native_value(self) -> str | None:
+        """Return mower status."""
+        state = self.state_message
+        return state.state if state else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return status attributes useful in automations."""
+        state = self.state_message
+        meta = self.coordinator.data.get("meta") or {}
+        return {
+            **super().extra_state_attributes,
+            "battery": state.battery if state else None,
+            "signal_strength": state.signal_strength if state else None,
+            "error_code": _error_code(state.error) if state else None,
+            "data_source": meta.get("last_data_source"),
+        }
+
+
+class NavimowYardZoneSensor(NavimowEntity, SensorEntity):
+    """Sensor describing which configured yard zone contains the mower."""
+
+    _attr_name = "Yard Zone"
+
+    def __init__(self, coordinator: NavimowCoordinator, entry: ConfigEntry) -> None:
+        """Initialize the sensor."""
+        super().__init__(coordinator)
+        self._entry = entry
+        self._attr_unique_id = f"{DOMAIN}_{self.mower_id}_yard_zone"
+
+    @property
+    def native_value(self) -> str | None:
+        """Return the smallest matching yard zone."""
+        mower_point = self.mower_position
+        if mower_point is None:
+            return None
+        zones = parse_zones(self._entry.options.get(CONF_ZONES, DEFAULT_ZONES))
+        return find_zone(mower_point[0], mower_point[1], zones) or "Unknown"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return yard-zone attributes."""
+        mower_point = self.mower_position
+        zones = parse_zones(self._entry.options.get(CONF_ZONES, DEFAULT_ZONES))
+        yard_zones = (
+            find_zones(mower_point[0], mower_point[1], zones) if mower_point else []
+        )
+        return {
+            **super().extra_state_attributes,
+            ATTR_LATITUDE: mower_point[0] if mower_point else None,
+            ATTR_LONGITUDE: mower_point[1] if mower_point else None,
+            ATTR_YARD_ZONE: self.native_value,
+            ATTR_YARD_ZONES: yard_zones,
+        }
+
+
+def _error_code(error: Any) -> str | None:
+    if isinstance(error, dict):
+        code = error.get("code") or error.get("error_code")
+        return str(code) if code else None
+    if isinstance(error, str):
+        return error
+    return None
