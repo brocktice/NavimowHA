@@ -1,5 +1,6 @@
 """The Navimow integration."""
 import asyncio
+import json
 import logging
 from typing import Any
 from urllib.parse import urlparse
@@ -227,6 +228,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     mqtt.port,
                     _get_client_id(),
                 )
+                _subscribe_location_topics()
 
             async def _on_disconnected() -> None:
                 _LOGGER.debug(
@@ -260,6 +262,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     device_id,
                     payload_text,
                 )
+                _handle_location_message(topic, payload_text, device_id)
                 if original_on_message is not None:
                     await original_on_message(topic, payload, device_id)
 
@@ -283,6 +286,55 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
             mqtt.client.on_subscribe = _on_subscribe
             mqtt.client.on_log = _on_log
+
+            def _subscribe_location_topics() -> None:
+                device_ids = [getattr(device, "id", None) for device in devices]
+                subscribed = 0
+                for device_id in device_ids:
+                    if not device_id:
+                        continue
+                    mqtt.client.subscribe(
+                        f"/downlink/vehicle/{device_id}/realtimeDate/location"
+                    )
+                    mqtt.client.subscribe(
+                        f"/downlink/vehicle/{device_id}/realtimeDate/position"
+                    )
+                    subscribed += 2
+                if subscribed:
+                    _LOGGER.info(
+                        "MQTT subscribed to %d Navimow location topic(s)",
+                        subscribed,
+                    )
+
+            def _handle_location_message(
+                topic: str, payload_text: str, device_id: str
+            ) -> None:
+                parts = topic.split("/")
+                if parts and parts[0] == "":
+                    parts = parts[1:]
+                if len(parts) != 5 or parts[3] != "realtimeDate":
+                    return
+                channel = parts[4]
+                if channel not in {"location", "position"}:
+                    return
+                try:
+                    payload_dict = json.loads(payload_text)
+                except json.JSONDecodeError:
+                    _LOGGER.debug("MQTT location payload was not JSON: topic=%s", topic)
+                    return
+                if not isinstance(payload_dict, dict):
+                    return
+                data = hass.data.get(DOMAIN, {}).get(entry.entry_id, {})
+                coordinator = data.get("coordinators", {}).get(device_id)
+                if coordinator is None:
+                    _LOGGER.debug(
+                        "MQTT location received before coordinator was ready: device=%s",
+                        device_id,
+                    )
+                    return
+                coordinator.update_position(payload_dict)
+
+            _subscribe_location_topics()
 
         async def _probe_mqtt_status(sdk: NavimowSDK) -> None:
             await asyncio.sleep(5)

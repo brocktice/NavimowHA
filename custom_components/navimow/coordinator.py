@@ -28,6 +28,7 @@ from .const import (
     MQTT_STALE_SECONDS,
     UPDATE_INTERVAL,
 )
+from .position import extract_position, position_dict
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -134,7 +135,7 @@ class NavimowCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             state=status.status.value,
             battery=status.battery,
             signal_strength=status.signal_strength,
-            position=status.position,
+            position=position_dict(status.position or status.extra),
             error=error,
             metrics=None,
         )
@@ -205,6 +206,19 @@ class NavimowCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             try:
                 status = await self.api.async_get_device_status(self.device.id)
                 self._last_state = self._device_status_to_state(status)
+                if self._last_state.position is None:
+                    http_position = await self._async_fetch_http_position()
+                    if http_position is not None:
+                        self._last_state = DeviceStateMessage(
+                            device_id=self._last_state.device_id,
+                            timestamp=self._last_state.timestamp,
+                            state=self._last_state.state,
+                            battery=self._last_state.battery,
+                            signal_strength=self._last_state.signal_strength,
+                            position=http_position,
+                            error=self._last_state.error,
+                            metrics=self._last_state.metrics,
+                        )
                 self._last_http_fetch = now
                 self._last_data_source = "http_fallback"
                 self._maybe_record_heatmap_sample(self._last_state)
@@ -267,6 +281,68 @@ class NavimowCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     def get_device_info(self) -> Any | None:
         return self.data.get("device")
+
+    async def _async_fetch_http_position(self) -> dict[str, float] | None:
+        """Fetch raw status once to recover position fields not modeled by SDK."""
+        try:
+            response = await self.api._async_request(
+                "POST",
+                "/openapi/smarthome/getVehicleStatus",
+                data={"devices": [{"id": self.device.id}]},
+            )
+        except Exception as err:
+            _LOGGER.debug(
+                "Raw HTTP position fetch failed for device %s: %s",
+                self.device.id,
+                err,
+            )
+            return None
+        if response.get("code") != 1:
+            return None
+        payload = response.get("data", {}).get("payload", {})
+        for status_data in payload.get("devices", []):
+            if not isinstance(status_data, dict):
+                continue
+            if status_data.get("id") not in (None, self.device.id):
+                continue
+            position = position_dict(status_data)
+            if position is not None:
+                return position
+        return None
+
+    def update_position(self, position_payload: Any) -> None:
+        """Merge a standalone MQTT location payload into the cached state."""
+        position = position_dict(position_payload)
+        if position is None:
+            _LOGGER.debug(
+                "Ignoring Navimow position payload without coordinates: %s",
+                position_payload,
+            )
+            return
+
+        state = self._last_state
+        if state is None:
+            state = DeviceStateMessage(
+                device_id=self.device.id,
+                timestamp=None,
+                state="unknown",
+                position=position,
+            )
+        else:
+            state = DeviceStateMessage(
+                device_id=state.device_id,
+                timestamp=state.timestamp,
+                state=state.state,
+                battery=state.battery,
+                signal_strength=state.signal_strength,
+                position=position,
+                error=state.error,
+                metrics=state.metrics,
+            )
+        self._last_state = state
+        self._last_data_source = "mqtt_location"
+        self._maybe_record_heatmap_sample(state)
+        self.async_set_updated_data(self._build_data())
 
     def _maybe_record_heatmap_sample(self, state: DeviceStateMessage | None) -> None:
         """Persist a throttled position/status sample for heatmap rendering."""
@@ -361,32 +437,7 @@ def _should_record_sample(
 
 
 def _extract_position(position: Any) -> tuple[float | None, float | None]:
-    if not isinstance(position, dict):
-        return None, None
-    latitude = _coerce_float(
-        position.get("lat")
-        or position.get("latitude")
-        or position.get("y")
-        or position.get("latGcj02")
-        or position.get("latWgs84")
-    )
-    longitude = _coerce_float(
-        position.get("lng")
-        or position.get("lon")
-        or position.get("longitude")
-        or position.get("x")
-        or position.get("lngGcj02")
-        or position.get("lngWgs84")
-    )
-    if latitude is not None and longitude is not None:
-        return latitude, longitude
-    for key in ("gps", "location", "coordinate", "coordinates"):
-        nested = position.get(key)
-        if isinstance(nested, dict):
-            latitude, longitude = _extract_position(nested)
-            if latitude is not None and longitude is not None:
-                return latitude, longitude
-    return None, None
+    return extract_position(position)
 
 
 def _sample_datetime(sample: dict[str, Any]):

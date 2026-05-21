@@ -13,6 +13,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .coordinator import NavimowCoordinator
+from .position import extract_position
 
 
 async def async_setup_entry(
@@ -31,44 +32,9 @@ async def async_setup_entry(
     )
 
 
-def _as_float(value: Any) -> float | None:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
-
 def _extract_position(position: Any) -> tuple[float | None, float | None]:
     """Extract latitude/longitude from common Navimow position payload shapes."""
-    if not isinstance(position, dict):
-        return None, None
-
-    latitude = _as_float(
-        position.get("lat")
-        or position.get("latitude")
-        or position.get("y")
-        or position.get("latGcj02")
-        or position.get("latWgs84")
-    )
-    longitude = _as_float(
-        position.get("lng")
-        or position.get("lon")
-        or position.get("longitude")
-        or position.get("x")
-        or position.get("lngGcj02")
-        or position.get("lngWgs84")
-    )
-    if latitude is not None and longitude is not None:
-        return latitude, longitude
-
-    for key in ("gps", "location", "coordinate", "coordinates"):
-        nested = position.get(key)
-        if isinstance(nested, dict):
-            latitude, longitude = _extract_position(nested)
-            if latitude is not None and longitude is not None:
-                return latitude, longitude
-
-    return None, None
+    return extract_position(position)
 
 
 class NavimowDeviceTracker(CoordinatorEntity[NavimowCoordinator], TrackerEntity):
