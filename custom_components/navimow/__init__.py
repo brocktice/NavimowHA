@@ -126,9 +126,35 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # 获取 MQTT 连接信息并创建 SDK
         try:
             mqtt_info = await api.async_get_mqtt_user_info()
+            cached_mqtt = {
+                "cached_mqtt_host": mqtt_info.get("mqttHost"),
+                "cached_mqtt_url": mqtt_info.get("mqttUrl"),
+                "cached_mqtt_username": mqtt_info.get("userName"),
+                "cached_mqtt_password": mqtt_info.get("pwdInfo"),
+            }
+            hass.config_entries.async_update_entry(
+                entry,
+                data={**entry.data, **cached_mqtt},
+            )
         except MowerAPIError as err:
-            _LOGGER.error("Failed to get MQTT info: %s", err)
-            raise ConfigEntryNotReady(f"Failed to get MQTT info: {err}") from err
+            # Navimow's API gateway can return transient upstream failures here
+            # after OAuth succeeds, including "url Circuit Breaker" and 502-style
+            # gateway errors. Raising ConfigEntryNotReady makes Home Assistant
+            # retry aggressively and can keep the upstream circuit open. Load the
+            # integration with cached/default MQTT settings instead; the
+            # coordinator can still use HTTP fallback for status data.
+            _LOGGER.warning(
+                "Failed to get MQTT info (%s); using cached/default MQTT "
+                "configuration. Real-time updates may be unavailable until the "
+                "Navimow API recovers.",
+                err,
+            )
+            mqtt_info = {
+                "mqttHost": entry.data.get("cached_mqtt_host"),
+                "mqttUrl": entry.data.get("cached_mqtt_url"),
+                "userName": entry.data.get("cached_mqtt_username"),
+                "pwdInfo": entry.data.get("cached_mqtt_password"),
+            }
 
         mqtt_host = mqtt_info.get("mqttHost") or entry.data.get(
             "mqtt_broker", MQTT_BROKER
@@ -291,6 +317,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             except Exception as err:
                 _LOGGER.warning("Failed to refresh MQTT credentials: %s", err)
                 return
+            hass.config_entries.async_update_entry(
+                entry,
+                data={
+                    **entry.data,
+                    "cached_mqtt_host": new_mqtt_info.get("mqttHost"),
+                    "cached_mqtt_url": new_mqtt_info.get("mqttUrl"),
+                    "cached_mqtt_username": new_mqtt_info.get("userName"),
+                    "cached_mqtt_password": new_mqtt_info.get("pwdInfo"),
+                },
+            )
             new_username = new_mqtt_info.get("userName")
             new_password = new_mqtt_info.get("pwdInfo")
             if new_auth_headers or new_username or new_password:
@@ -397,5 +433,4 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             hass.data[DOMAIN].pop(entry.entry_id)
 
     return unload_ok
-
 
