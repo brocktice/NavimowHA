@@ -13,6 +13,8 @@ ATTR_LONGITUDE: Final = "longitude"
 ATTR_MOWER_ID: Final = "mower_id"
 ATTR_MODEL: Final = "model"
 ATTR_SERIAL_NUMBER: Final = "serial_number"
+ATTR_HEATMAP_SAMPLE_COUNT: Final = "heatmap_sample_count"
+ATTR_HEATMAP_MAX_AGE_DAYS: Final = "heatmap_max_age_days"
 
 # OAuth2 Configuration
 # 授权页面 URL（用户登录页面）

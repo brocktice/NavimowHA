@@ -1,5 +1,6 @@
 """DataUpdateCoordinator for Navimow integration."""
 import logging
+import math
 import time
 from datetime import timedelta
 from typing import Any
@@ -7,7 +8,9 @@ from typing import Any
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers import config_entry_oauth2_flow
+from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
+from homeassistant.util import dt as dt_util
 
 from mower_sdk.api import MowerAPI
 from mower_sdk.models import (
@@ -26,6 +29,14 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+PROBLEM_STATES = {"error", "unknown"}
+PROBLEM_ERRORS = {"stuck", "lifted", "sensor_error", "motor_error", "blade_error"}
+HEATMAP_STORE_VERSION = 1
+HEATMAP_MAX_SAMPLES = 5000
+HEATMAP_MAX_AGE = timedelta(days=45)
+HEATMAP_MIN_SAMPLE_INTERVAL = timedelta(minutes=2)
+HEATMAP_SAVE_DELAY = 5
 
 
 class NavimowCoordinator(DataUpdateCoordinator[dict[str, Any]]):
@@ -55,11 +66,47 @@ class NavimowCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._last_mqtt_update: float | None = None
         self._last_http_fetch: float | None = None
         self._last_data_source: str | None = None
+        self._heatmap_save_task: asyncio.Task | None = None
+        self._heatmap_samples: list[dict[str, Any]] = []
+        self._last_heatmap_sample: dict[str, dict[str, Any]] = {}
+        self._heatmap_store: Store[list[dict[str, Any]]] = Store(
+            hass, HEATMAP_STORE_VERSION, f"{DOMAIN}_heatmap_{device.id}"
+        )
 
     async def async_setup(self) -> None:
         """Register callbacks from SDK."""
+        await self.async_load_heatmap()
         self.sdk.on_state(self._handle_state)
         self.sdk.on_attributes(self._handle_attributes)
+
+    async def async_load_heatmap(self) -> None:
+        """Load persisted mower heatmap samples."""
+        loaded = await self._heatmap_store.async_load()
+        if isinstance(loaded, list):
+            self._heatmap_samples = self._pruned_heatmap_samples(loaded)
+            self._last_heatmap_sample = {}
+            for sample in self._heatmap_samples:
+                mower_id = sample.get("mower_id")
+                if isinstance(mower_id, str):
+                    self._last_heatmap_sample[mower_id] = sample
+
+    async def async_stop(self) -> None:
+        """Persist pending heatmap data before unload."""
+        if self._heatmap_save_task and not self._heatmap_save_task.done():
+            self._heatmap_save_task.cancel()
+            try:
+                await self._heatmap_save_task
+            except asyncio.CancelledError:
+                pass
+        await self._async_save_heatmap()
+
+    def heatmap_samples(self) -> list[dict[str, Any]]:
+        """Return heatmap samples for this mower."""
+        return [
+            sample
+            for sample in self._heatmap_samples
+            if sample.get("mower_id") == self.device.id
+        ]
 
     def _build_data(self) -> dict[str, Any]:
         return {
@@ -138,6 +185,7 @@ class NavimowCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if cached_state is not None:
             self._last_state = cached_state
             self._last_data_source = "mqtt_cache"
+            self._maybe_record_heatmap_sample(cached_state)
 
         cached_attrs = self.sdk.get_cached_attributes(self.device.id)
         if cached_attrs is not None:
@@ -158,6 +206,7 @@ class NavimowCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self._last_state = self._device_status_to_state(status)
                 self._last_http_fetch = now
                 self._last_data_source = "http_fallback"
+                self._maybe_record_heatmap_sample(self._last_state)
             except ConfigEntryAuthFailed:
                 raise
             except Exception as err:
@@ -186,6 +235,7 @@ class NavimowCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         self._last_mqtt_update = time.monotonic()
         self._last_data_source = "mqtt_push"
+        self._maybe_record_heatmap_sample(state)
         self.hass.loop.call_soon_threadsafe(self._update_from_state, state)
 
     def _handle_attributes(self, attrs: DeviceAttributesMessage) -> None:
@@ -216,3 +266,144 @@ class NavimowCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     def get_device_info(self) -> Any | None:
         return self.data.get("device")
+
+    def _maybe_record_heatmap_sample(self, state: DeviceStateMessage | None) -> None:
+        """Persist a throttled position/status sample for heatmap rendering."""
+        if state is None:
+            return
+        latitude, longitude = _extract_position(state.position)
+        if latitude is None or longitude is None:
+            return
+        now = dt_util.utcnow()
+        is_problem = _is_problem_state(state)
+        last = self._last_heatmap_sample.get(self.device.id)
+        if last and not _should_record_sample(last, now, latitude, longitude, is_problem):
+            return
+
+        sample = {
+            "mower_id": self.device.id,
+            "ts": now.isoformat(),
+            "latitude": latitude,
+            "longitude": longitude,
+            "stuck": is_problem,
+            "state": state.state,
+            "error": state.error,
+        }
+        self._heatmap_samples.append(sample)
+        self._last_heatmap_sample[self.device.id] = sample
+        self._heatmap_samples = self._pruned_heatmap_samples(self._heatmap_samples)
+        self._schedule_heatmap_save()
+
+    def _pruned_heatmap_samples(
+        self, samples: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """Drop old or malformed heatmap samples."""
+        cutoff = dt_util.utcnow() - HEATMAP_MAX_AGE
+        pruned = [
+            sample
+            for sample in samples
+            if _sample_datetime(sample) is not None
+            and _sample_datetime(sample) >= cutoff
+            and _coerce_float(sample.get("latitude")) is not None
+            and _coerce_float(sample.get("longitude")) is not None
+        ]
+        return pruned[-HEATMAP_MAX_SAMPLES:]
+
+    def _schedule_heatmap_save(self) -> None:
+        """Debounce heatmap persistence."""
+        if self._heatmap_save_task and not self._heatmap_save_task.done():
+            return
+        self._heatmap_save_task = self.hass.async_create_task(
+            self._async_delayed_save_heatmap()
+        )
+
+    async def _async_delayed_save_heatmap(self) -> None:
+        await asyncio.sleep(HEATMAP_SAVE_DELAY)
+        await self._async_save_heatmap()
+
+    async def _async_save_heatmap(self) -> None:
+        await self._heatmap_store.async_save(self._heatmap_samples)
+
+
+def _is_problem_state(state: DeviceStateMessage) -> bool:
+    if state.state in PROBLEM_STATES:
+        return True
+    error = state.error
+    if isinstance(error, dict):
+        code = str(error.get("code") or error.get("error_code") or "").lower()
+        return code in PROBLEM_ERRORS or "stuck" in code
+    if isinstance(error, str):
+        return error.lower() in PROBLEM_ERRORS or "stuck" in error.lower()
+    return False
+
+
+def _should_record_sample(
+    last: dict[str, Any],
+    now,
+    latitude: float,
+    longitude: float,
+    is_stuck: bool,
+) -> bool:
+    """Return true when a heatmap sample is meaningfully new."""
+    last_dt = _sample_datetime(last)
+    if last_dt is None:
+        return True
+    if bool(last.get("stuck")) != is_stuck:
+        return True
+    if now - last_dt >= HEATMAP_MIN_SAMPLE_INTERVAL:
+        return True
+    last_lat = _coerce_float(last.get("latitude"))
+    last_lon = _coerce_float(last.get("longitude"))
+    if last_lat is None or last_lon is None:
+        return True
+    return _distance_m(last_lat, last_lon, latitude, longitude) >= 3
+
+
+def _extract_position(position: Any) -> tuple[float | None, float | None]:
+    if not isinstance(position, dict):
+        return None, None
+    latitude = _coerce_float(
+        position.get("lat")
+        or position.get("latitude")
+        or position.get("y")
+        or position.get("latGcj02")
+        or position.get("latWgs84")
+    )
+    longitude = _coerce_float(
+        position.get("lng")
+        or position.get("lon")
+        or position.get("longitude")
+        or position.get("x")
+        or position.get("lngGcj02")
+        or position.get("lngWgs84")
+    )
+    if latitude is not None and longitude is not None:
+        return latitude, longitude
+    for key in ("gps", "location", "coordinate", "coordinates"):
+        nested = position.get(key)
+        if isinstance(nested, dict):
+            latitude, longitude = _extract_position(nested)
+            if latitude is not None and longitude is not None:
+                return latitude, longitude
+    return None, None
+
+
+def _sample_datetime(sample: dict[str, Any]):
+    value = sample.get("ts")
+    if not isinstance(value, str):
+        return None
+    return dt_util.parse_datetime(value)
+
+
+def _distance_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    reference_lat = math.radians((lat1 + lat2) / 2)
+    x = math.radians(lon2 - lon1) * 6371000 * math.cos(reference_lat)
+    y = math.radians(lat2 - lat1) * 6371000
+    return math.hypot(x, y)
+
+
+def _coerce_float(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None

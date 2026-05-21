@@ -428,6 +428,11 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             # 标记正在卸载，阻止断连回调触发新的凭据刷新
             if "unload_flag" in data:
                 data["unload_flag"][0] = True
+            for coordinator in data.get("coordinators", {}).values():
+                try:
+                    await coordinator.async_stop()
+                except Exception as err:
+                    _LOGGER.warning("Error stopping Navimow coordinator: %s", err)
             sdk = data.get("sdk")
             if sdk:
                 try:
