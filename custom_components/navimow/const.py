@@ -3,6 +3,16 @@ from __future__ import annotations
 from typing import Final
 
 DOMAIN: Final = "navimow"
+CONF_ZONES: Final = "zones_json"
+DEFAULT_ZONES: Final = "[]"
+
+ATTR_YARD_ZONE: Final = "yard_zone"
+ATTR_YARD_ZONES: Final = "yard_zones"
+ATTR_LATITUDE: Final = "latitude"
+ATTR_LONGITUDE: Final = "longitude"
+ATTR_MOWER_ID: Final = "mower_id"
+ATTR_MODEL: Final = "model"
+ATTR_SERIAL_NUMBER: Final = "serial_number"
 
 # OAuth2 Configuration
 # 授权页面 URL（用户登录页面）
