@@ -92,7 +92,7 @@ class NavimowYardMapCamera(NavimowEntity, Camera):
         """Return PNG image bytes."""
         mower_point = self.mower_position
         zones = self.zones
-        points = _collect_points(zones, mower_point)
+        points = _crop_points(zones, mower_point)
         if not points:
             return _empty_png("No mower position or yard zones available")
 
@@ -153,7 +153,7 @@ class NavimowYardDetailMapCamera(NavimowYardMapCamera):
         """Return square PNG image bytes centered on the mower."""
         mower_point = self.mower_position
         zones = self.zones
-        points = _collect_points(zones, mower_point)
+        points = _crop_points(zones, mower_point)
         if not points:
             return _empty_png("No mower position or yard zones available", DETAIL_WIDTH, DETAIL_HEIGHT)
 
@@ -211,7 +211,7 @@ class NavimowYardHeatmapCamera(NavimowYardMapCamera):
             and _coerce_float(sample.get("longitude")) is not None
         ]
         zones = self.zones
-        base_points = _collect_points(zones, mower_point)
+        base_points = _crop_points(zones, mower_point)
         points = base_points or sample_points
         if not points:
             return _empty_png("No mower position, yard zones, or heatmap samples available")
@@ -251,6 +251,19 @@ def _collect_points(
     points: list[tuple[float, float]] = []
     if mower_point:
         points.append(mower_point)
+    points.extend(_collect_zone_points(zones))
+    return points
+
+
+def _crop_points(
+    zones: list[dict[str, Any]], mower_point: tuple[float, float] | None
+) -> list[tuple[float, float]]:
+    zone_points = _collect_zone_points(zones)
+    return zone_points or _collect_points(zones, mower_point)
+
+
+def _collect_zone_points(zones: list[dict[str, Any]]) -> list[tuple[float, float]]:
+    points: list[tuple[float, float]] = []
     for zone in zones:
         if _is_circle(zone):
             lat = float(zone["center"][0])
