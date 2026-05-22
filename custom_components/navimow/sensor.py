@@ -135,12 +135,19 @@ class NavimowStatusSensor(NavimowEntity, SensorEntity):
         """Return status attributes useful in automations."""
         state = self.state_message
         meta = self.coordinator.data.get("meta") or {}
+        location_debug = meta.get("last_location_debug") or {}
         return {
             **super().extra_state_attributes,
             "battery": state.battery if state else None,
             "signal_strength": state.signal_strength if state else None,
             "error_code": _error_code(state.error) if state else None,
             "data_source": meta.get("last_data_source"),
+            "last_location_topic": location_debug.get("topic"),
+            "last_location_relative_x": location_debug.get("relative_x"),
+            "last_location_relative_y": location_debug.get("relative_y"),
+            "last_location_position": location_debug.get("position"),
+            "location_origin_configured": location_debug.get("origin_configured"),
+            "last_location_payload": location_debug.get("payload"),
         }
 
 

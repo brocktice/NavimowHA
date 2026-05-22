@@ -205,6 +205,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         def _attach_mqtt_debug_hooks(sdk: NavimowSDK, api: MowerAPI) -> None:
             mqtt = sdk._mqtt
             original_on_message = mqtt.on_message
+            original_client_on_message = mqtt.client.on_message
             def _get_client_id() -> str:
                 client_id_bytes = getattr(mqtt.client, "_client_id", b"")
                 if isinstance(client_id_bytes, (bytes, bytearray)):
@@ -293,34 +294,54 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 for device_id in device_ids:
                     if not device_id:
                         continue
+                    mqtt.client.subscribe(f"/downlink/vehicle/{device_id}/#")
+                    mqtt.client.subscribe(f"downlink/vehicle/{device_id}/#")
+                    mqtt.client.subscribe(f"navimow/{device_id}/#")
                     mqtt.client.subscribe(
                         f"/downlink/vehicle/{device_id}/realtimeDate/location"
                     )
                     mqtt.client.subscribe(
                         f"/downlink/vehicle/{device_id}/realtimeDate/position"
                     )
-                    subscribed += 2
+                    subscribed += 5
                 if subscribed:
                     _LOGGER.info(
-                        "MQTT subscribed to %d Navimow location topic(s)",
+                        "MQTT subscribed to %d Navimow location/debug topic(s)",
                         subscribed,
                     )
+
+            def _client_on_message(_client, _userdata, msg) -> None:
+                topic = msg.topic
+                payload_bytes = msg.payload or b""
+                payload_text = payload_bytes.decode("utf-8", errors="replace")
+                device_id = _device_id_from_topic(topic)
+                if device_id:
+                    hass.loop.call_soon_threadsafe(
+                        _handle_location_message,
+                        topic,
+                        payload_text,
+                        device_id,
+                    )
+                if original_client_on_message is not None:
+                    original_client_on_message(_client, _userdata, msg)
+
+            def _device_id_from_topic(topic: str) -> str | None:
+                parts = topic.split("/")
+                if parts and parts[0] == "":
+                    parts = parts[1:]
+                if len(parts) >= 3 and parts[0] == "downlink" and parts[1] == "vehicle":
+                    return parts[2]
+                if len(parts) >= 2 and parts[0] == "navimow":
+                    return parts[1]
+                return None
 
             def _handle_location_message(
                 topic: str, payload_text: str, device_id: str
             ) -> None:
-                parts = topic.split("/")
-                if parts and parts[0] == "":
-                    parts = parts[1:]
-                if len(parts) != 5 or parts[3] != "realtimeDate":
-                    return
-                channel = parts[4]
-                if channel not in {"location", "position"}:
-                    return
                 try:
                     payload_dict = json.loads(payload_text)
                 except json.JSONDecodeError:
-                    _LOGGER.debug("MQTT location payload was not JSON: topic=%s", topic)
+                    _LOGGER.debug("MQTT payload was not JSON: topic=%s", topic)
                     return
                 if not isinstance(payload_dict, dict):
                     return
@@ -332,8 +353,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         device_id,
                     )
                     return
-                coordinator.update_position(payload_dict)
+                coordinator.update_position(payload_dict, topic=topic)
 
+            mqtt.client.on_message = _client_on_message
             _subscribe_location_topics()
 
         async def _probe_mqtt_status(sdk: NavimowSDK) -> None:

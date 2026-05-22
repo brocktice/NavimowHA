@@ -31,7 +31,7 @@ from .const import (
     MQTT_STALE_SECONDS,
     UPDATE_INTERVAL,
 )
-from .position import extract_position, position_dict_with_origin
+from .position import extract_position, extract_relative_xy, position_dict_with_origin
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -73,6 +73,7 @@ class NavimowCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._last_mqtt_update: float | None = None
         self._last_http_fetch: float | None = None
         self._last_data_source: str | None = None
+        self._last_location_debug: dict[str, Any] = {}
         self._heatmap_save_task: asyncio.Task | None = None
         self._heatmap_samples: list[dict[str, Any]] = []
         self._last_heatmap_sample: dict[str, dict[str, Any]] = {}
@@ -124,6 +125,7 @@ class NavimowCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "last_data_source": self._last_data_source,
                 "last_mqtt_update_monotonic": self._last_mqtt_update,
                 "last_http_fetch_monotonic": self._last_http_fetch,
+                "last_location_debug": self._last_location_debug,
             },
         }
 
@@ -316,15 +318,26 @@ class NavimowCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 return position
         return None
 
-    def update_position(self, position_payload: Any) -> None:
+    def update_position(self, position_payload: Any, topic: str | None = None) -> bool:
         """Merge a standalone MQTT location payload into the cached state."""
         position = self._position_dict(position_payload)
+        relative = extract_relative_xy(position_payload)
+        self._last_location_debug = {
+            "topic": topic,
+            "payload": _truncate_payload(position_payload),
+            "relative_x": relative[0] if relative else None,
+            "relative_y": relative[1] if relative else None,
+            "position": position,
+            "origin_configured": self._option_float(CONF_BASE_STATION_LATITUDE)
+            is not None
+            and self._option_float(CONF_BASE_STATION_LONGITUDE) is not None,
+        }
         if position is None:
             _LOGGER.debug(
                 "Ignoring Navimow position payload without coordinates: %s",
                 position_payload,
             )
-            return
+            return False
 
         state = self._last_state
         if state is None:
@@ -349,6 +362,7 @@ class NavimowCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._last_data_source = "mqtt_location"
         self._maybe_record_heatmap_sample(state)
         self.async_set_updated_data(self._build_data())
+        return True
 
     def _position_dict(self, position_payload: Any) -> dict[str, float] | None:
         """Return absolute GPS position from absolute or base-relative payloads."""
@@ -497,3 +511,10 @@ def _coerce_float(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _truncate_payload(payload: Any) -> Any:
+    text = str(payload)
+    if len(text) > 500:
+        return f"{text[:500]}..."
+    return payload
