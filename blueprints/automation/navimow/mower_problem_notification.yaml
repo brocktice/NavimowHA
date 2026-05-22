@@ -1,5 +1,5 @@
 blueprint:
-  name: Navimow Yard - Problem notification with map
+  name: Segway Navimow Yard - Problem notification with map
   description: >
     Send a mobile notification with the mower's current yard-zone description
     and a camera snapshot of the Navimow Yard map when the mower enters a
@@ -53,12 +53,12 @@ blueprint:
         text:
     title:
       name: Notification title
-      default: Mower needs attention
+      default: Navimow mower needs attention
       selector:
         text:
     message_prefix:
       name: Message prefix
-      default: The mower is in a problem state.
+      default: The Navimow mower is in a problem state.
       selector:
         text:
 
