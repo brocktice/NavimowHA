@@ -44,7 +44,6 @@ async def async_setup_panel(hass: HomeAssistant, entry: ConfigEntry) -> None:
         module_url=f"{STATIC_URL_PATH}/panel.js",
         embed_iframe=False,
         require_admin=True,
-        config_panel_domain=DOMAIN,
         config={"url": f"{STATIC_URL_PATH}/zone_editor.html?ha=1"},
     )
 
