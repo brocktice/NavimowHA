@@ -32,9 +32,12 @@ WIDTH = 1600
 HEIGHT = 900
 DETAIL_WIDTH = 800
 DETAIL_HEIGHT = 800
+HEATMAP_WIDTH = 900
+HEATMAP_HEIGHT = 900
 PADDING = 40
 TEXT_SCALE = WIDTH / 900
 DETAIL_TEXT_SCALE = DETAIL_WIDTH / 900
+HEATMAP_TEXT_SCALE = HEATMAP_WIDTH / 900
 EARTH_RADIUS_M = 6371000
 MAX_TILE_COUNT = 16
 MAX_TILE_ZOOM = 19
@@ -216,7 +219,7 @@ class NavimowYardHeatmapCamera(NavimowYardMapCamera):
         if not points:
             return _empty_png("No mower position, yard zones, or heatmap samples available")
 
-        bounds = _bounds(points, WIDTH, HEIGHT, OVERVIEW_MIN_SPAN_M)
+        bounds = _bounds(points, HEATMAP_WIDTH, HEATMAP_HEIGHT, OVERVIEW_MIN_SPAN_M)
         tile_data = await _satellite_tiles(self.hass, bounds)
         yard_zone = _yard_zone(mower_point, zones)
         return await self.hass.async_add_executor_job(
@@ -227,11 +230,11 @@ class NavimowYardHeatmapCamera(NavimowYardMapCamera):
             self.mower_name,
             yard_zone or "Unknown",
             tile_data,
-            WIDTH,
-            HEIGHT,
+            HEATMAP_WIDTH,
+            HEATMAP_HEIGHT,
             70,
             112,
-            TEXT_SCALE,
+            HEATMAP_TEXT_SCALE,
             samples,
             False,
         )
