@@ -343,7 +343,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 except json.JSONDecodeError:
                     _LOGGER.debug("MQTT payload was not JSON: topic=%s", topic)
                     return
-                if not isinstance(payload_dict, dict):
+                if not isinstance(payload_dict, dict | list):
                     return
                 data = hass.data.get(DOMAIN, {}).get(entry.entry_id, {})
                 coordinator = data.get("coordinators", {}).get(device_id)

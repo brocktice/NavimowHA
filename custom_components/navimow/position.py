@@ -25,8 +25,24 @@ LONGITUDE_KEYS = (
     "gcj02Lng",
     "longitudeValue",
 )
-RELATIVE_X_KEYS = ("x", "thetaX", "theta_x", "relativeX", "relative_x")
-RELATIVE_Y_KEYS = ("y", "thetaY", "theta_y", "relativeY", "relative_y")
+RELATIVE_X_KEYS = (
+    "x",
+    "thetaX",
+    "theta_x",
+    "relativeX",
+    "relative_x",
+    "postureX",
+    "posture_x",
+)
+RELATIVE_Y_KEYS = (
+    "y",
+    "thetaY",
+    "theta_y",
+    "relativeY",
+    "relative_y",
+    "postureY",
+    "posture_y",
+)
 METERS_PER_DEGREE_LATITUDE = 111111.0
 POSITION_KEYS = (
     "position",
