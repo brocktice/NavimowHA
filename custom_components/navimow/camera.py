@@ -207,7 +207,8 @@ class NavimowYardHeatmapCamera(NavimowYardMapCamera):
             and _coerce_float(sample.get("longitude")) is not None
         ]
         zones = self.zones
-        points = _collect_points(zones, mower_point) + sample_points
+        base_points = _collect_points(zones, mower_point)
+        points = base_points or sample_points
         if not points:
             return _empty_png("No mower position, yard zones, or heatmap samples available")
 
