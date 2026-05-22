@@ -322,6 +322,8 @@ class NavimowCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Merge a standalone MQTT location payload into the cached state."""
         position = self._position_dict(position_payload)
         relative = extract_relative_xy(position_payload)
+        if position is None and relative is None:
+            return False
         self._last_location_debug = {
             "topic": topic,
             "payload": _truncate_payload(position_payload),
@@ -383,6 +385,8 @@ class NavimowCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self, state: DeviceStateMessage
     ) -> DeviceStateMessage:
         position = self._position_dict(state.position)
+        if position is None and self._last_state is not None:
+            position = self._last_state.position
         if position == state.position:
             return state
         return DeviceStateMessage(

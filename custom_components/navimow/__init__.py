@@ -263,7 +263,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     device_id,
                     payload_text,
                 )
-                _handle_location_message(topic, payload_text, device_id)
                 if original_on_message is not None:
                     await original_on_message(topic, payload, device_id)
 
