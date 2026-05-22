@@ -450,26 +450,33 @@ def _render_png(
         north, west, south, east = _tile_bounds(zoom, tile_x, tile_y)
         x1, y1 = project(_to_xy(north, west, bounds))
         x2, y2 = project(_to_xy(south, east, bounds))
-        box = (
-            int(min(x1, x2)),
-            int(min(y1, y2)),
-            max(1, int(abs(x2 - x1))),
-            max(1, int(abs(y2 - y1))),
-        )
-        tile = tile.resize((box[2], box[3]))
+        dst_left = min(x1, x2)
+        dst_top = min(y1, y2)
+        dst_width = abs(x2 - x1)
+        dst_height = abs(y2 - y1)
+        if dst_width <= 0 or dst_height <= 0:
+            continue
         intersection = _intersect_rect(
-            (box[0], box[1], box[0] + box[2], box[1] + box[3]),
+            (
+                math.floor(dst_left),
+                math.floor(dst_top),
+                math.ceil(dst_left + dst_width),
+                math.ceil(dst_top + dst_height),
+            ),
             (0, 0, image_width, image_height),
         )
         if intersection is None:
             continue
-        crop = (
-            intersection[0] - box[0],
-            intersection[1] - box[1],
-            intersection[2] - box[0],
-            intersection[3] - box[1],
+        crop = _source_tile_crop(
+            intersection, dst_left, dst_top, dst_width, dst_height, tile.size
         )
-        image.paste(tile.crop(crop), (intersection[0], intersection[1]))
+        tile = tile.crop(crop).resize(
+            (
+                max(1, intersection[2] - intersection[0]),
+                max(1, intersection[3] - intersection[1]),
+            )
+        )
+        image.paste(tile, (intersection[0], intersection[1]))
 
     if heatmap_samples:
         _draw_heatmap(draw, bounds, heatmap_samples, image_width, image_height, top_offset, y_base)
@@ -658,6 +665,32 @@ def _intersect_rect(
     return left, top, right, bottom
 
 
+def _source_tile_crop(
+    intersection: tuple[int, int, int, int],
+    dst_left: float,
+    dst_top: float,
+    dst_width: float,
+    dst_height: float,
+    tile_size: tuple[int, int],
+) -> tuple[int, int, int, int]:
+    """Return the source tile crop for the visible destination rectangle."""
+    tile_width, tile_height = tile_size
+    left = round(((intersection[0] - dst_left) / dst_width) * tile_width)
+    top = round(((intersection[1] - dst_top) / dst_height) * tile_height)
+    right = round(((intersection[2] - dst_left) / dst_width) * tile_width)
+    bottom = round(((intersection[3] - dst_top) / dst_height) * tile_height)
+    left = max(0, min(tile_width - 1, left))
+    top = max(0, min(tile_height - 1, top))
+    right = max(left + 1, min(tile_width, right))
+    bottom = max(top + 1, min(tile_height, bottom))
+    return (
+        left,
+        top,
+        right,
+        bottom,
+    )
+
+
 def _lat_lon_bounds(bounds: dict[str, float]) -> dict[str, float]:
     reference_lat = bounds["reference_lat"]
 
@@ -677,26 +710,48 @@ def _lat_lon_bounds(bounds: dict[str, float]) -> dict[str, float]:
 
 def _select_tiles(lat_lon_bounds: dict[str, float]) -> tuple[int, list[tuple[int, int]]]:
     for zoom in range(MAX_TILE_ZOOM, MIN_TILE_ZOOM - 1, -1):
-        tiles = _tiles_for_bounds(lat_lon_bounds, zoom)
-        if len(tiles) <= MAX_TILE_COUNT:
-            return zoom, tiles
-    return MIN_TILE_ZOOM, _tiles_for_bounds(lat_lon_bounds, MIN_TILE_ZOOM)[:MAX_TILE_COUNT]
+        tile_range = _tile_range_for_bounds(lat_lon_bounds, zoom)
+        if _tile_range_count(tile_range) <= MAX_TILE_COUNT:
+            return zoom, _tiles_from_range(tile_range)
+    return MIN_TILE_ZOOM, _tiles_from_range(
+        _tile_range_for_bounds(lat_lon_bounds, MIN_TILE_ZOOM), MAX_TILE_COUNT
+    )
 
 
 def _tiles_for_bounds(
     lat_lon_bounds: dict[str, float], zoom: int
 ) -> list[tuple[int, int]]:
+    return _tiles_from_range(_tile_range_for_bounds(lat_lon_bounds, zoom))
+
+
+def _tile_range_for_bounds(
+    lat_lon_bounds: dict[str, float], zoom: int
+) -> tuple[int, int, int, int]:
     west = lat_lon_bounds["west"]
     east = lat_lon_bounds["east"]
     north = lat_lon_bounds["north"]
     south = lat_lon_bounds["south"]
     min_x, min_y = _lat_lon_to_tile(north, west, zoom)
     max_x, max_y = _lat_lon_to_tile(south, east, zoom)
-    return [
-        (x, y)
-        for x in range(min(min_x, max_x), max(min_x, max_x) + 1)
-        for y in range(min(min_y, max_y), max(min_y, max_y) + 1)
-    ]
+    return min(min_x, max_x), max(min_x, max_x), min(min_y, max_y), max(min_y, max_y)
+
+
+def _tile_range_count(tile_range: tuple[int, int, int, int]) -> int:
+    min_x, max_x, min_y, max_y = tile_range
+    return (max_x - min_x + 1) * (max_y - min_y + 1)
+
+
+def _tiles_from_range(
+    tile_range: tuple[int, int, int, int], limit: int | None = None
+) -> list[tuple[int, int]]:
+    min_x, max_x, min_y, max_y = tile_range
+    tiles: list[tuple[int, int]] = []
+    for x in range(min_x, max_x + 1):
+        for y in range(min_y, max_y + 1):
+            tiles.append((x, y))
+            if limit is not None and len(tiles) >= limit:
+                return tiles
+    return tiles
 
 
 def _lat_lon_to_tile(lat: float, lon: float, zoom: int) -> tuple[int, int]:
