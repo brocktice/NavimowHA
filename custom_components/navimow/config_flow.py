@@ -1,5 +1,6 @@
 """Config flow for Navimow integration."""
 from __future__ import annotations
+import json
 import logging
 from typing import Any
 
@@ -18,6 +19,8 @@ from .const import (
     API_BASE_URL,
     CONF_BASE_STATION_LATITUDE,
     CONF_BASE_STATION_LONGITUDE,
+    CONF_ZONES,
+    DEFAULT_ZONES,
     MQTT_BROKER,
     MQTT_PORT,
     MQTT_USERNAME,
@@ -169,6 +172,21 @@ class NavimowOptionsFlowHandler(config_entries.OptionsFlow):
     ) -> FlowResult:
         """Manage the options."""
         if user_input is not None:
+            errors: dict[str, str] = {}
+            zones_json = user_input.get(CONF_ZONES)
+            if zones_json:
+                try:
+                    zones = json.loads(zones_json)
+                    if not isinstance(zones, list):
+                        errors[CONF_ZONES] = "invalid_zones_json"
+                except json.JSONDecodeError:
+                    errors[CONF_ZONES] = "invalid_zones_json"
+            if errors:
+                return self.async_show_form(
+                    step_id="init",
+                    data_schema=self._options_schema(user_input),
+                    errors=errors,
+                )
             options = dict(self._config_entry.options)
             options.update(user_input)
             return self.async_create_entry(title="", data=options)
@@ -178,17 +196,21 @@ class NavimowOptionsFlowHandler(config_entries.OptionsFlow):
             data_schema=self._options_schema(),
         )
 
-    def _options_schema(self) -> vol.Schema:
+    def _options_schema(self, user_input: dict[str, Any] | None = None) -> vol.Schema:
         """Return options schema."""
         schema: dict[Any, Any] = {}
-        latitude = self._config_entry.options.get(CONF_BASE_STATION_LATITUDE)
-        longitude = self._config_entry.options.get(CONF_BASE_STATION_LONGITUDE)
+        values = user_input or self._config_entry.options
+        latitude = values.get(CONF_BASE_STATION_LATITUDE)
+        longitude = values.get(CONF_BASE_STATION_LONGITUDE)
+        zones = values.get(CONF_ZONES, DEFAULT_ZONES)
         latitude_key = vol.Optional(CONF_BASE_STATION_LATITUDE)
         longitude_key = vol.Optional(CONF_BASE_STATION_LONGITUDE)
+        zones_key = vol.Optional(CONF_ZONES, default=zones)
         if latitude is not None:
             latitude_key = vol.Optional(CONF_BASE_STATION_LATITUDE, default=latitude)
         if longitude is not None:
             longitude_key = vol.Optional(CONF_BASE_STATION_LONGITUDE, default=longitude)
         schema[latitude_key] = vol.Coerce(float)
         schema[longitude_key] = vol.Coerce(float)
+        schema[zones_key] = str
         return vol.Schema(schema)

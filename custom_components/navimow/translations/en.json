@@ -32,8 +32,16 @@
     "step": {
       "init": {
         "title": "Navimow Options",
-        "description": "Configure Navimow integration options"
+        "description": "Configure Navimow integration options",
+        "data": {
+          "base_station_latitude": "Base station latitude",
+          "base_station_longitude": "Base station longitude",
+          "zones_json": "Yard zones JSON"
+        }
       }
+    },
+    "error": {
+      "invalid_zones_json": "Yard zones JSON must be a valid JSON array."
     }
   },
   "entity": {

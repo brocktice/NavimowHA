@@ -28,8 +28,16 @@
     "step": {
       "init": {
         "title": "Navimow 选项",
-        "description": "配置 Navimow 集成选项"
+        "description": "配置 Navimow 集成选项",
+        "data": {
+          "base_station_latitude": "基站纬度",
+          "base_station_longitude": "基站经度",
+          "zones_json": "庭院区域 JSON"
+        }
       }
+    },
+    "error": {
+      "invalid_zones_json": "庭院区域 JSON 必须是有效的 JSON 数组。"
     }
   }
 }
