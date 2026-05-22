@@ -39,6 +39,8 @@ EARTH_RADIUS_M = 6371000
 MAX_TILE_COUNT = 16
 MAX_TILE_ZOOM = 19
 MIN_TILE_ZOOM = 16
+OVERVIEW_MIN_SPAN_M = 120
+DETAIL_MIN_SPAN_M = 45
 FONT_PATHS = (
     "/usr/local/lib/python3.14/site-packages/aioslimproto/font/DejaVu-Sans.ttf",
     "/usr/local/lib/python3.13/site-packages/aioslimproto/font/DejaVu-Sans.ttf",
@@ -94,7 +96,7 @@ class NavimowYardMapCamera(NavimowEntity, Camera):
         if not points:
             return _empty_png("No mower position or yard zones available")
 
-        bounds = _bounds(points, WIDTH, HEIGHT)
+        bounds = _bounds(points, WIDTH, HEIGHT, OVERVIEW_MIN_SPAN_M)
         tile_data = await _satellite_tiles(self.hass, bounds)
         yard_zone = _yard_zone(mower_point, zones)
         return await self.hass.async_add_executor_job(
@@ -153,7 +155,7 @@ class NavimowYardDetailMapCamera(NavimowYardMapCamera):
         if not points:
             return _empty_png("No mower position or yard zones available", DETAIL_WIDTH, DETAIL_HEIGHT)
 
-        full_bounds = _bounds(points, WIDTH, HEIGHT)
+        full_bounds = _bounds(points, WIDTH, HEIGHT, OVERVIEW_MIN_SPAN_M)
         bounds = _detail_bounds(full_bounds, mower_point)
         tile_data = await _satellite_tiles(self.hass, bounds)
         yard_zone = _yard_zone(mower_point, zones)
@@ -209,7 +211,7 @@ class NavimowYardHeatmapCamera(NavimowYardMapCamera):
         if not points:
             return _empty_png("No mower position, yard zones, or heatmap samples available")
 
-        bounds = _bounds(points, WIDTH, HEIGHT)
+        bounds = _bounds(points, WIDTH, HEIGHT, OVERVIEW_MIN_SPAN_M)
         tile_data = await _satellite_tiles(self.hass, bounds)
         yard_zone = _yard_zone(mower_point, zones)
         return await self.hass.async_add_executor_job(
@@ -264,7 +266,10 @@ def _collect_points(
 
 
 def _bounds(
-    points: list[tuple[float, float]], image_width: int, image_height: int
+    points: list[tuple[float, float]],
+    image_width: int,
+    image_height: int,
+    min_span_m: float,
 ) -> dict[str, float]:
     reference_lat = sum(lat for lat, _ in points) / len(points)
     xy_points = [_to_xy(lat, lon, {"reference_lat": reference_lat}) for lat, lon in points]
@@ -278,6 +283,8 @@ def _bounds(
     if max_y == min_y:
         max_y += 1
         min_y -= 1
+    min_x, max_x = _expand_to_min_span(min_x, max_x, min_span_m)
+    min_y, max_y = _expand_to_min_span(min_y, max_y, min_span_m)
     margin_x = max((max_x - min_x) * 0.28, 8)
     margin_y = max((max_y - min_y) * 0.28, 8)
     min_x -= margin_x
@@ -316,7 +323,7 @@ def _detail_bounds(
     mower_x, mower_y = _to_xy(mower_point[0], mower_point[1], full_bounds)
     full_width = full_bounds["max_x"] - full_bounds["min_x"]
     full_height = full_bounds["max_y"] - full_bounds["min_y"]
-    side = max(full_width * 0.5, full_height * 0.5, 18)
+    side = max(full_width * 0.5, full_height * 0.5, DETAIL_MIN_SPAN_M)
     half = side / 2
     return {
         "reference_lat": full_bounds["reference_lat"],
@@ -325,6 +332,15 @@ def _detail_bounds(
         "min_y": mower_y - half,
         "max_y": mower_y + half,
     }
+
+
+def _expand_to_min_span(min_value: float, max_value: float, min_span_m: float) -> tuple[float, float]:
+    span = max_value - min_value
+    if span >= min_span_m:
+        return min_value, max_value
+    center = (min_value + max_value) / 2
+    half = min_span_m / 2
+    return center - half, center + half
 
 
 def _to_xy(lat: float, lon: float, bounds: dict[str, float]) -> tuple[float, float]:
