@@ -32,7 +32,7 @@ blueprint:
           domain: camera
     notify_devices:
       name: Notification devices
-      description: Mobile App devices to notify.
+      description: Mobile App devices to notify. These only appear after the Home Assistant Companion App has connected to this Home Assistant instance.
       default: []
       selector:
         device:
