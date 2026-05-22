@@ -289,6 +289,7 @@
       let zoneCounter = 1;
       let isLoading = false;
       let dirty = false;
+      let homeAssistantAccessToken = null;
 
       latInput.value = startLat.toFixed(7);
       lonInput.value = startLon.toFixed(7);
@@ -386,6 +387,19 @@
         saveButton.hidden = true;
         loadMowerLocation();
       }
+
+      window.addEventListener("message", (event) => {
+        if (event.origin !== window.location.origin) {
+          return;
+        }
+        if (event.data?.type !== "navimow-yard-auth" || !event.data.accessToken) {
+          return;
+        }
+        homeAssistantAccessToken = event.data.accessToken;
+        if (isHomeAssistantPanel && !dirty) {
+          loadHomeAssistantState();
+        }
+      });
 
       document.querySelector("#go").addEventListener("click", () => {
         const lat = Number(latInput.value);
@@ -554,6 +568,9 @@
       }
 
       function authHeaders() {
+        if (homeAssistantAccessToken) {
+          return { Authorization: `Bearer ${homeAssistantAccessToken}` };
+        }
         try {
           const tokens = JSON.parse(localStorage.getItem("hassTokens") || "{}");
           const token = tokens.access_token;
