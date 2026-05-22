@@ -8,7 +8,7 @@ from io import BytesIO
 from typing import Any
 
 from aiohttp import ClientError
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 from homeassistant.components.camera import Camera
 from homeassistant.config_entries import ConfigEntry
@@ -112,6 +112,8 @@ class NavimowYardMapCamera(NavimowEntity, Camera):
             70,
             112,
             TEXT_SCALE,
+            None,
+            True,
         )
 
     @property
@@ -172,6 +174,8 @@ class NavimowYardDetailMapCamera(NavimowYardMapCamera):
             0,
             0,
             DETAIL_TEXT_SCALE,
+            None,
+            True,
         )
 
 
@@ -229,6 +233,7 @@ class NavimowYardHeatmapCamera(NavimowYardMapCamera):
             112,
             TEXT_SCALE,
             samples,
+            False,
         )
 
 
@@ -453,6 +458,7 @@ def _render_png(
     y_base: int = 112,
     text_scale: float = TEXT_SCALE,
     heatmap_samples: list[dict[str, Any]] | None = None,
+    show_zones: bool = True,
 ) -> bytes:
     image = Image.new("RGB", (image_width, image_height), "#f4f6f5")
     draw = ImageDraw.Draw(image, "RGBA")
@@ -496,40 +502,44 @@ def _render_png(
         image.paste(tile, (intersection[0], intersection[1]))
 
     if heatmap_samples:
-        _draw_heatmap(draw, bounds, heatmap_samples, image_width, image_height, top_offset, y_base)
+        _apply_heatmap(
+            image, bounds, heatmap_samples, image_width, image_height, top_offset, y_base
+        )
+        draw = ImageDraw.Draw(image, "RGBA")
 
-    label_font = _font(8, text_scale)
-    labels: list[tuple[str, float, float]] = []
-    for index, zone in enumerate(zones):
-        color = _hex_to_rgba(_zone_color(index), 72)
-        outline = _hex_to_rgba(_zone_color(index), 255)
-        if _is_circle(zone):
-            center = _to_xy(float(zone["center"][0]), float(zone["center"][1]), bounds)
-            x, y = project(center)
-            radius = max(
-                4,
-                _radius_px(
-                    float(zone["radius_m"]), bounds, image_width, image_height, top_offset
-                ),
-            )
-            draw.ellipse((x - radius, y - radius, x + radius, y + radius), fill=color, outline=outline, width=5)
-            labels.append((str(zone["name"]), x, y))
-        elif isinstance(zone.get("polygon"), list):
-            points = [
-                project(_to_xy(float(point[0]), float(point[1]), bounds))
-                for point in zone["polygon"]
-                if isinstance(point, list) and len(point) == 2
-            ]
-            if len(points) < 3:
-                continue
-            draw.polygon(points, fill=color)
-            draw.line([*points, points[0]], fill=outline, width=5)
-            cx = sum(x for x, _ in points) / len(points)
-            cy = sum(y for _, y in points) / len(points)
-            labels.append((str(zone["name"]), cx, cy))
+    if show_zones:
+        label_font = _font(8, text_scale)
+        labels: list[tuple[str, float, float]] = []
+        for index, zone in enumerate(zones):
+            color = _hex_to_rgba(_zone_color(index), 72)
+            outline = _hex_to_rgba(_zone_color(index), 255)
+            if _is_circle(zone):
+                center = _to_xy(float(zone["center"][0]), float(zone["center"][1]), bounds)
+                x, y = project(center)
+                radius = max(
+                    4,
+                    _radius_px(
+                        float(zone["radius_m"]), bounds, image_width, image_height, top_offset
+                    ),
+                )
+                draw.ellipse((x - radius, y - radius, x + radius, y + radius), fill=color, outline=outline, width=5)
+                labels.append((str(zone["name"]), x, y))
+            elif isinstance(zone.get("polygon"), list):
+                points = [
+                    project(_to_xy(float(point[0]), float(point[1]), bounds))
+                    for point in zone["polygon"]
+                    if isinstance(point, list) and len(point) == 2
+                ]
+                if len(points) < 3:
+                    continue
+                draw.polygon(points, fill=color)
+                draw.line([*points, points[0]], fill=outline, width=5)
+                cx = sum(x for x, _ in points) / len(points)
+                cy = sum(y for _, y in points) / len(points)
+                labels.append((str(zone["name"]), cx, cy))
 
-    for text, x, y in labels:
-        _draw_label(draw, text, x, y, label_font, text_scale)
+        for text, x, y in labels:
+            _draw_label(draw, text, x, y, label_font, text_scale)
 
     if mower_point:
         x, y = project(_to_xy(mower_point[0], mower_point[1], bounds))
@@ -557,8 +567,8 @@ def _render_png(
     return output.getvalue()
 
 
-def _draw_heatmap(
-    draw: ImageDraw.ImageDraw,
+def _apply_heatmap(
+    image: Image.Image,
     bounds: dict[str, float],
     samples: list[dict[str, Any]],
     image_width: int,
@@ -566,13 +576,18 @@ def _draw_heatmap(
     top_offset: int,
     y_base: int,
 ) -> None:
-    """Draw age-decayed problem/ok samples over the satellite map."""
+    """Composite an age-decayed smooth problem/ok heatmap over the satellite map."""
     now = dt_util.utcnow()
     max_age_seconds = HEATMAP_MAX_AGE.total_seconds()
+    scale = 0.5
+    layer_size = (round(image_width * scale), round(image_height * scale))
+    layer_width, layer_height = layer_size
+    red_values = [0] * (layer_width * layer_height)
+    green_values = [0] * (layer_width * layer_height)
     project = _projector(bounds, image_width, image_height, top_offset, y_base)
-    radius = max(
-        18,
-        min(70, _radius_px(8, bounds, image_width, image_height, top_offset)),
+    sample_radius = max(
+        8,
+        min(80, round(_radius_px(8, bounds, image_width, image_height, top_offset) * scale)),
     )
 
     for sample in samples:
@@ -586,25 +601,53 @@ def _draw_heatmap(
         if weight <= 0:
             continue
         x, y = project(_to_xy(latitude, longitude, bounds))
-        if sample.get("stuck"):
-            fill = (220, 32, 32, round(38 + 120 * weight))
-            outline = (138, 18, 18, round(45 + 90 * weight))
-            sample_radius = radius * (1.1 + 0.6 * weight)
-        else:
-            fill = (34, 160, 82, round(14 + 45 * weight))
-            outline = (20, 100, 52, round(10 + 35 * weight))
-            sample_radius = radius * (0.75 + 0.35 * weight)
-        draw.ellipse(
-            (
-                x - sample_radius,
-                y - sample_radius,
-                x + sample_radius,
-                y + sample_radius,
-            ),
-            fill=fill,
-            outline=outline,
-            width=max(1, round(2 * weight)),
-        )
+        layer_x = round(x * scale)
+        layer_y = round(y * scale)
+        intensity = round(85 + 170 * weight)
+        values = red_values if sample.get("stuck") else green_values
+        sample_intensity = intensity if sample.get("stuck") else round(intensity * 0.9)
+        for offset_y in range(-sample_radius, sample_radius + 1):
+            point_y = layer_y + offset_y
+            if point_y < 0 or point_y >= layer_height:
+                continue
+            for offset_x in range(-sample_radius, sample_radius + 1):
+                if offset_x * offset_x + offset_y * offset_y > sample_radius * sample_radius:
+                    continue
+                point_x = layer_x + offset_x
+                if point_x < 0 or point_x >= layer_width:
+                    continue
+                index = point_y * layer_width + point_x
+                values[index] = min(255, values[index] + sample_intensity)
+
+    blur_radius = max(
+        8,
+        min(100, round(_radius_px(12, bounds, image_width, image_height, top_offset) * scale)),
+    )
+    red = Image.frombytes("L", layer_size, bytes(red_values)).filter(
+        ImageFilter.GaussianBlur(blur_radius)
+    )
+    green = Image.frombytes("L", layer_size, bytes(green_values)).filter(
+        ImageFilter.GaussianBlur(blur_radius)
+    )
+    overlay = Image.new("RGBA", layer_size, (0, 0, 0, 0))
+    red_pixels = red.load()
+    green_pixels = green.load()
+    overlay_pixels = overlay.load()
+    for y in range(layer_height):
+        for x in range(layer_width):
+            red_value = red_pixels[x, y]
+            green_value = green_pixels[x, y]
+            value = max(red_value, green_value)
+            if value < 3:
+                continue
+            alpha = min(185, round(value * 1.15))
+            if red_value >= green_value:
+                overlay_pixels[x, y] = (235, 38, 38, alpha)
+            else:
+                overlay_pixels[x, y] = (30, 180, 92, round(alpha * 0.9))
+    overlay = overlay.resize((image_width, image_height), Image.Resampling.BICUBIC)
+    blended = Image.alpha_composite(image.convert("RGBA"), overlay).convert("RGB")
+    image.paste(blended)
 
 
 def _sample_datetime(sample: dict[str, Any]):
