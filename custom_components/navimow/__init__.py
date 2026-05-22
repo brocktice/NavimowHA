@@ -293,19 +293,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 for device_id in device_ids:
                     if not device_id:
                         continue
-                    mqtt.client.subscribe(f"/downlink/vehicle/{device_id}/#")
-                    mqtt.client.subscribe(f"downlink/vehicle/{device_id}/#")
-                    mqtt.client.subscribe(f"navimow/{device_id}/#")
                     mqtt.client.subscribe(
                         f"/downlink/vehicle/{device_id}/realtimeDate/location"
                     )
                     mqtt.client.subscribe(
                         f"/downlink/vehicle/{device_id}/realtimeDate/position"
                     )
-                    subscribed += 5
+                    subscribed += 2
                 if subscribed:
                     _LOGGER.info(
-                        "MQTT subscribed to %d Navimow location/debug topic(s)",
+                        "MQTT subscribed to %d Navimow location topic(s)",
                         subscribed,
                     )
 

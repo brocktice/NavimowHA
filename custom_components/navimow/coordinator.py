@@ -31,7 +31,12 @@ from .const import (
     MQTT_STALE_SECONDS,
     UPDATE_INTERVAL,
 )
-from .position import extract_position, extract_relative_xy, position_dict_with_origin
+from .position import (
+    extract_position,
+    extract_relative_xy,
+    extract_timestamp,
+    position_dict_with_origin,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -42,6 +47,8 @@ HEATMAP_MAX_SAMPLES = 5000
 HEATMAP_MAX_AGE = timedelta(days=45)
 HEATMAP_MIN_SAMPLE_INTERVAL = timedelta(minutes=2)
 HEATMAP_SAVE_DELAY = 5
+LOCATION_MIN_UPDATE_INTERVAL = 5.0
+LOCATION_MIN_MOVE_METERS = 0.5
 
 
 class NavimowCoordinator(DataUpdateCoordinator[dict[str, Any]]):
@@ -74,6 +81,9 @@ class NavimowCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._last_http_fetch: float | None = None
         self._last_data_source: str | None = None
         self._last_location_debug: dict[str, Any] = {}
+        self._last_location_timestamp: int | None = None
+        self._last_location_update_monotonic: float | None = None
+        self._last_location_relative: tuple[float, float] | None = None
         self._heatmap_save_task: asyncio.Task | None = None
         self._heatmap_samples: list[dict[str, Any]] = []
         self._last_heatmap_sample: dict[str, dict[str, Any]] = {}
@@ -322,11 +332,27 @@ class NavimowCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Merge a standalone MQTT location payload into the cached state."""
         position = self._position_dict(position_payload)
         relative = extract_relative_xy(position_payload)
+        location_timestamp = extract_timestamp(position_payload)
         if position is None and relative is None:
             return False
+
+        if (
+            location_timestamp is not None
+            and self._last_location_timestamp is not None
+            and location_timestamp <= self._last_location_timestamp
+        ):
+            return False
+
+        now = time.monotonic()
+        if self._should_throttle_location_update(now, relative):
+            if location_timestamp is not None:
+                self._last_location_timestamp = location_timestamp
+            return False
+
         self._last_location_debug = {
             "topic": topic,
             "payload": _truncate_payload(position_payload),
+            "timestamp": location_timestamp,
             "relative_x": relative[0] if relative else None,
             "relative_y": relative[1] if relative else None,
             "position": position,
@@ -341,6 +367,10 @@ class NavimowCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
             return False
 
+        if location_timestamp is not None:
+            self._last_location_timestamp = location_timestamp
+        self._last_location_update_monotonic = now
+        self._last_location_relative = relative
         state = self._last_state
         if state is None:
             state = DeviceStateMessage(
@@ -365,6 +395,22 @@ class NavimowCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._maybe_record_heatmap_sample(state)
         self.async_set_updated_data(self._build_data())
         return True
+
+    def _should_throttle_location_update(
+        self, now: float, relative: tuple[float, float] | None
+    ) -> bool:
+        last_update = self._last_location_update_monotonic
+        if last_update is None:
+            return False
+        if now - last_update >= LOCATION_MIN_UPDATE_INTERVAL:
+            return False
+        if relative is None or self._last_location_relative is None:
+            return True
+        distance = math.hypot(
+            relative[0] - self._last_location_relative[0],
+            relative[1] - self._last_location_relative[1],
+        )
+        return distance < LOCATION_MIN_MOVE_METERS
 
     def _position_dict(self, position_payload: Any) -> dict[str, float] | None:
         """Return absolute GPS position from absolute or base-relative payloads."""

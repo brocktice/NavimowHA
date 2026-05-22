@@ -53,6 +53,11 @@ POSITION_KEYS = (
     "point",
     "pos",
 )
+TIMESTAMP_KEYS = (
+    "time",
+    "timestamp",
+    "ts",
+)
 
 
 def extract_position(position: Any) -> tuple[float | None, float | None]:
@@ -101,6 +106,15 @@ def extract_relative_xy(position: Any) -> tuple[float, float] | None:
     if x_value is None or y_value is None:
         return None
     return x_value, y_value
+
+
+def extract_timestamp(position: Any) -> int | None:
+    """Extract a millisecond/second timestamp from known location payload shapes."""
+    payload = _to_plain(position)
+    value = _extract_timestamp_from_payload(payload, depth=0)
+    if value is None:
+        return None
+    return int(value)
 
 
 def _extract_from_payload(
@@ -185,6 +199,38 @@ def _extract_relative_from_payload(
                     return x_value, y_value
 
     return None, None
+
+
+def _extract_timestamp_from_payload(payload: Any, depth: int) -> float | None:
+    if depth > 6:
+        return None
+
+    if isinstance(payload, dict):
+        value = _first_float(payload, TIMESTAMP_KEYS)
+        if value is not None:
+            return value
+
+        for key in POSITION_KEYS:
+            if key in payload:
+                value = _extract_timestamp_from_payload(payload[key], depth + 1)
+                if value is not None:
+                    return value
+
+        for value in payload.values():
+            if isinstance(value, dict | list | tuple):
+                timestamp = _extract_timestamp_from_payload(value, depth + 1)
+                if timestamp is not None:
+                    return timestamp
+        return None
+
+    if isinstance(payload, list | tuple):
+        for value in payload:
+            if isinstance(value, dict | list | tuple):
+                timestamp = _extract_timestamp_from_payload(value, depth + 1)
+                if timestamp is not None:
+                    return timestamp
+
+    return None
 
 
 def _to_plain(value: Any) -> Any:
